@@ -1,11 +1,8 @@
 "use server";
 
-import { cookies } from "next/headers";
 import { attempt, str, type ActionState } from "@/lib/action";
-import { env } from "@/lib/env";
-import { isState } from "@/lib/geo";
 import { submitReport } from "@/lib/reports";
-import { DEMO_REGION_COOKIE, requestContext } from "@/lib/request-context";
+import { requestContext } from "@/lib/request-context";
 import { signUssdRequest } from "@/lib/ussd";
 import { processUssdCallback } from "@/lib/ussd-http";
 import { verifyCode, verifyQr, type VerifyResult } from "@/lib/verify";
@@ -17,13 +14,6 @@ export async function checkCodeAction(_: ActionState, fd: FormData): Promise<Act
 
 export async function checkQrAction(payload: string): Promise<VerifyResult> {
   return verifyQr(payload, await requestContext("qr"));
-}
-
-export async function setDemoRegionAction(region: string) {
-  if (!env.demoMode) return;
-  const jar = await cookies();
-  if (isState(region)) jar.set(DEMO_REGION_COOKIE, region, { path: "/", sameSite: "lax", maxAge: 60 * 60 * 24 });
-  else jar.delete(DEMO_REGION_COOKIE);
 }
 
 export async function reportAction(_: ActionState, fd: FormData): Promise<ActionState> {

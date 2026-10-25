@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, eq, gt, inArray, lte, notExists, sql, type SQL } from "drizzle-orm";
+import { and, asc, eq, exists, gt, inArray, lte, ne, notExists, sql, type SQL } from "drizzle-orm";
 import { getDb, schema as s } from "@/db";
 import { appendAudit } from "./audit";
 import type { Actor } from "./authz";
@@ -83,17 +83,22 @@ export async function demoSamples(actor: Actor) {
     .where(and(eq(s.batches.status, "released"), gt(s.batches.expiryDate, today)))
     .orderBy(asc(s.batches.shortId));
 
-  // One unchecked pack from each of up to three batches, plus a separate one for the copied-code demo.
+  // One unchecked pack from each of up to three batches.
   const genuine: Sample[] = [];
-  let clone: Sample | null = null;
-  for (const b of batches) {
-    if (genuine.length === 3 && clone) break;
-    const picked = await pick(and(sellable, eq(s.units.batchId, b.id)), clone ? 1 : 2, true);
-    if (picked[0] && genuine.length < 3) genuine.push(picked.shift()!);
-    if (!clone && picked[0]) clone = picked[0];
+  for (const b of batches.slice(0, 3)) {
+    const [picked] = await pick(and(sellable, eq(s.units.batchId, b.id)), 1, true);
+    if (picked) genuine.push(picked);
   }
 
-  const [recalled, expired, unreleased] = await Promise.all([
+  // A code already flagged by the risk engine as copied (checked in distant states within minutes).
+  const flagged = exists(
+    getDb()
+      .select({ x: sql`1` })
+      .from(s.riskCases)
+      .where(and(eq(s.riskCases.unitId, s.units.id), eq(s.riskCases.kind, "possible_clone"), ne(s.riskCases.status, "closed"))),
+  );
+  const [clones, recalled, expired, unreleased] = await Promise.all([
+    pick(and(eq(s.units.state, "ACTIVE"), flagged), 1, false),
     pick(eq(s.units.state, "RECALLED"), 1, false),
     pick(and(eq(s.units.state, "ACTIVE"), lte(s.batches.expiryDate, today)), 1, false),
     pick(inArray(s.units.state, ["VOIDED", "REJECTED"]), 1, false),
@@ -111,5 +116,5 @@ export async function demoSamples(actor: Actor) {
   await getDb().transaction((tx) =>
     appendAudit(tx, { actorType: "user", actorId: actor.userId, action: "demo.sample_codes_viewed", decision: "allow" }),
   );
-  return { genuine, clone, recalled: recalled[0] ?? null, expired: expired[0] ?? null, unreleased: unreleased[0] ?? null, fakeCode, forged };
+  return { genuine, clone: clones[0] ?? null, recalled: recalled[0] ?? null, expired: expired[0] ?? null, unreleased: unreleased[0] ?? null, fakeCode, forged };
 }

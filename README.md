@@ -33,14 +33,14 @@ Unit-level product identity for regulated goods. Manufacturers issue a unique id
 
 Sign in from `/login` — in demo mode each person is one click.
 
-**Ready-made codes:** while signed in, open `/demo` (*Sample packs*) for real QR codes and 16-digit codes from the seeded batches — genuine, copied, recalled, expired, never-released, made-up, forged and mistyped — each labelled with the result it produces.
+**Ready-made codes:** while signed in, open `/demo` (*Sample packs*) for real QR codes and 16-digit codes from the seeded batches — genuine, flagged as copied, recalled, expired, never-released, made-up, forged and mistyped — each labelled with the result it produces.
 
 1. **Chioma Eze** (Production Manager) → Batches → *New batch* on **Ikeja L1**, then *Request identity allocation*. Try approving it yourself: not possible.
 2. **Ibrahim Musa** (Factory Manager) → Approvals → *Approve and issue*. Identities, signatures and codes are issued in one transaction.
 3. **Samuel Adeyemi** (Line Operator) → Line jobs → *Start job* → *Open print sheet* (scan a QR with a phone) → *Run line* (a few smudged labels get rejected) → *Finish run*.
 4. **Chioma** → batch page → *Reconcile*. A wrong physical count is refused and logged.
 5. **Fatima Bello** (QA) → *Release*. Only now do units become verifiable.
-6. **Consumer**: scan a label's QR with a phone → *Identity issued — no known alerts*. On the laptop, set *Demo · simulate check location* to Kano and type the same code → *Possible copied code*. Try a rejected label's code → *Not released*. Try `/ussd`.
+6. **Consumer**: scan a label's QR with a phone → *Identity issued — no known alerts*. Use the *Copied code* sample on `/demo` → *Possible copied code*. Try a rejected label's code → *Not released*. Try `/ussd`.
 7. **Ngozi Obi** (Compliance) → batch → *Propose recall*; **Adaeze Okafor** (Owner) approves. Re-check any code → recall warning.
 8. **Regulatory Analyst** → `/regulator`: national checks, outcomes, risk cases, recalls, public keys.
 9. **Kemi Adebayo** (Platform) → approve the pending applicant and product; *Reset demo data* returns everything to the starting state.

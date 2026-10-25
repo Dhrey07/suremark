@@ -86,19 +86,13 @@ export default async function DemoPacksPage() {
         ))}
         {d.clone && (
           <SampleCard
-            title="Copied code (clone attack)"
+            title="Copied code"
             expect="Possible copied code"
             tone="amber"
             sample={d.clone}
             url={qr(d.clone)}
             code={d.clone.code}
-            how={
-              <>
-                1. On the <Link href="/" className="underline">Check</Link> page set <em>Demo · simulate check location</em> to Lagos and check this
-                code — it passes. 2. Switch the location to Kano and check it again — flagged, because one pack cannot be in two distant states
-                minutes apart. (A phone scan in Nigeria uses its real network location instead.)
-              </>
-            }
+            how="This code was checked in Lagos and then in Kano minutes later — impossible for one pack — so the risk engine flagged it as copied and opened a high-severity case for the manufacturer and the regulator. Every check now warns the buyer."
           />
         )}
         {d.recalled && (

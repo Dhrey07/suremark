@@ -1,12 +1,8 @@
 import { CodeCheck } from "@/components/code-check";
-import { DemoRegion } from "@/components/demo-region";
-import { env } from "@/lib/env";
-import { demoRegion } from "@/lib/request-context";
 import { USSD_SERVICE_CODE } from "@/lib/ussd";
 import Link from "next/link";
 
-export default async function Home() {
-  const region = await demoRegion();
+export default function Home() {
   return (
     <div className="mx-auto grid max-w-5xl gap-8 px-4 py-10 md:grid-cols-[1fr_minmax(0,26rem)] md:gap-x-10 md:py-16">
       <div className="md:col-start-1 md:row-start-1">
@@ -14,11 +10,10 @@ export default async function Home() {
         <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900 md:text-4xl">Check that a product&apos;s code was really issued and released.</h1>
         <p className="mt-3 max-w-xl text-slate-600">Every pack carries its own one-time identity. Check it in seconds — no app, no scratching, any phone.</p>
       </div>
-      <div className="space-y-3 md:col-start-2 md:row-span-2 md:row-start-1">
+      <div className="md:col-start-2 md:row-span-2 md:row-start-1">
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <CodeCheck />
         </div>
-        {env.demoMode && <DemoRegion current={region} />}
       </div>
       <div className="space-y-6 md:col-start-1 md:row-start-2">
         <ol className="grid gap-3 sm:grid-cols-3">
