@@ -4,7 +4,8 @@ import { closeDb } from "../src/db";
 import { isEmpty, resetDatabase, seedDemo } from "../src/lib/seed";
 
 // Schema changes and seeding use a direct (unpooled) connection when the platform provides one.
-if (process.env.DATABASE_URL_UNPOOLED) process.env.DATABASE_URL = process.env.DATABASE_URL_UNPOOLED;
+const directUrl = process.env.DATABASE_URL_UNPOOLED ?? process.env.POSTGRES_URL_NON_POOLING;
+if (directUrl) process.env.DATABASE_URL = directUrl;
 
 async function main() {
   const ifEmpty = process.argv.includes("--if-empty");
