@@ -33,6 +33,8 @@ Unit-level product identity for regulated goods. Manufacturers issue a unique id
 
 Sign in from `/login` — in demo mode each person is one click.
 
+**Ready-made codes:** while signed in, open `/demo` (*Sample packs*) for real QR codes and 16-digit codes from the seeded batches — genuine, copied, recalled, expired, never-released, made-up, forged and mistyped — each labelled with the result it produces.
+
 1. **Chioma Eze** (Production Manager) → Batches → *New batch* on **Ikeja L1**, then *Request identity allocation*. Try approving it yourself: not possible.
 2. **Ibrahim Musa** (Factory Manager) → Approvals → *Approve and issue*. Identities, signatures and codes are issued in one transaction.
 3. **Samuel Adeyemi** (Line Operator) → Line jobs → *Start job* → *Open print sheet* (scan a QR with a phone) → *Run line* (a few smudged labels get rejected) → *Finish run*.

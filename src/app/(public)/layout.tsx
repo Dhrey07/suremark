@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Logo, PrototypeNotice } from "@/components/brand";
+import { env } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +14,9 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
             <Link href="/" className="hover:text-slate-900">Check</Link>
             <Link href="/ussd" className="hover:text-slate-900">USSD</Link>
             <Link href="/report" className="hover:text-slate-900">Report</Link>
+            {env.demoMode && (
+              <Link href="/demo" className="hover:text-slate-900">Sample packs</Link>
+            )}
             <Link href="/login" className="font-medium text-brand-700 hover:text-brand-800">Sign in</Link>
           </nav>
         </div>
