@@ -7,7 +7,7 @@ export function cx(...c: (string | false | null | undefined)[]) {
 
 export function Card({ className, children, ...rest }: ComponentProps<"section">) {
   return (
-    <section className={cx("rounded-xl border border-slate-200 bg-white shadow-sm", className)} {...rest}>
+    <section className={cx("rounded-2xl border border-[#e6e2d8] bg-white shadow-[0_1px_2px_rgba(20,24,21,0.04)]", className)} {...rest}>
       {children}
     </section>
   );
@@ -27,11 +27,11 @@ export function CardHeader({ title, description, action }: { title: ReactNode; d
 
 export function PageHeader({ title, description, action, eyebrow }: { title: ReactNode; description?: ReactNode; action?: ReactNode; eyebrow?: ReactNode }) {
   return (
-    <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+    <div className="mb-8 flex flex-wrap items-end justify-between gap-5">
       <div className="min-w-0">
         {eyebrow && <div className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">{eyebrow}</div>}
-        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{title}</h1>
-        {description && <p className="mt-1 max-w-3xl text-sm text-slate-600">{description}</p>}
+        <h1 className="text-[clamp(1.75rem,3vw,2.4rem)] font-semibold leading-[1.08] tracking-[-0.035em] text-[#171a18]">{title}</h1>
+        {description && <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">{description}</p>}
       </div>
       {action}
     </div>
@@ -54,9 +54,9 @@ export function Badge({ tone = "neutral", children }: { tone?: Tone; children: R
 
 export function Stat({ label, value, hint }: { label: string; value: ReactNode; hint?: ReactNode }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+    <div className="rounded-2xl border border-[#e6e2d8] bg-white px-5 py-4 shadow-[0_1px_2px_rgba(20,24,21,0.04)]">
       <div className="text-xs font-medium text-slate-500">{label}</div>
-      <div className="tabular mt-1 text-2xl font-semibold text-slate-900">{value}</div>
+      <div className="tabular mt-2 text-3xl font-semibold tracking-[-0.04em] text-slate-950">{value}</div>
       {hint && <div className="mt-0.5 text-xs text-slate-500">{hint}</div>}
     </div>
   );
@@ -87,7 +87,7 @@ export function ButtonLink({ href, variant = "primary", size = "md", children }:
 }
 
 export const inputClass =
-  "block w-full rounded-lg border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-inset ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-brand-600";
+  "block min-h-11 w-full rounded-xl border-0 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-[#d9d5ca] placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-brand-600";
 
 export function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
   return (

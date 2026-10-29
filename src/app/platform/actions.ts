@@ -8,7 +8,7 @@ import { env } from "@/lib/env";
 import { forbidden } from "@/lib/errors";
 import { resetDatabase, seedDemo } from "@/lib/seed";
 import { requireActor } from "@/lib/session";
-import { reviewManufacturer, reviewProduct } from "@/lib/services/catalog";
+import { reviewManufacturer, reviewProduct, setManufacturerOperationalStatus } from "@/lib/services/catalog";
 
 export async function reviewManufacturerAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const actor = await requireActor();
@@ -40,4 +40,14 @@ export async function resetDemoAction(_: ActionState): Promise<ActionState> {
   });
   if (res.error) return res;
   redirect("/login");
+}
+
+export async function governManufacturerAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const actor = await requireActor();
+  return attempt(async () => {
+    const suspended = str(fd, "operation") === "suspend";
+    await setManufacturerOperationalStatus(actor, str(fd, "manufacturerId"), suspended, str(fd, "reason"));
+    revalidatePath("/platform");
+    return { ok: true, message: suspended ? "Manufacturer suspended and active tenant access revoked." : "Manufacturer reactivated." };
+  });
 }

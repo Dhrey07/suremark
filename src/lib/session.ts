@@ -9,14 +9,23 @@ import { loadActor } from "./actor";
 import { appendAudit } from "./audit";
 import type { Actor } from "./authz";
 import { sha256, verifyPassword } from "./password";
+import { hit } from "./ratelimit";
 
 const COOKIE = "upa_session";
 const SESSION_HOURS = 12;
 
-export async function signIn(email: string, password: string): Promise<{ ok: true; home: string } | { ok: false }> {
+export async function signIn(
+  email: string,
+  password: string,
+  expectedDomain?: "platform" | "manufacturer",
+): Promise<{ ok: true; home: string } | { ok: false }> {
   const db = getDb();
-  const [user] = await db.select().from(schema.users).where(eq(schema.users.email, email.trim().toLowerCase()));
-  const valid = user && !user.disabledAt && (await verifyPassword(password, user.passwordHash));
+  const normalizedEmail = email.trim().toLowerCase();
+  const bucket = sha256(`login:${normalizedEmail}`).toString("base64url");
+  if (!(await hit(bucket, 10))) return { ok: false };
+  const [user] = await db.select().from(schema.users).where(eq(schema.users.email, normalizedEmail));
+  const passwordValid = user ? await verifyPassword(password, user.passwordHash) : false;
+  const valid = user && !user.disabledAt && passwordValid && (!expectedDomain || user.domain === expectedDomain);
   if (!user || !valid) {
     await db.transaction((tx) =>
       appendAudit(tx, { actorType: "user", actorId: user?.id ?? null, action: "auth.sign_in", decision: "deny" }),
@@ -39,7 +48,7 @@ export async function signIn(email: string, password: string): Promise<{ ok: tru
     path: "/",
     maxAge: SESSION_HOURS * 3600,
   });
-  return { ok: true, home: user.domain === "platform" ? "/platform" : user.domain === "regulator" ? "/regulator" : "/app" };
+  return { ok: true, home: user.domain === "platform" ? "/platform/dashboard" : user.domain === "regulator" ? "/regulator" : "/manufacturer/dashboard" };
 }
 
 export async function signOut() {
@@ -64,8 +73,8 @@ export const getActor = cache(async (): Promise<Actor | null> => {
   return loadActor(db, session.userId, session.activeManufacturerId);
 });
 
-export async function requireActor(): Promise<Actor> {
+export async function requireActor(loginPath = "/login"): Promise<Actor> {
   const actor = await getActor();
-  if (!actor) redirect("/login");
+  if (!actor) redirect(loginPath);
   return actor;
 }

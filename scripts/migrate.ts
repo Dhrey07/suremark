@@ -9,10 +9,10 @@ if (directUrl) process.env.DATABASE_URL = directUrl;
 
 function preflight() {
   const missing = [];
-  if (!process.env.DATABASE_URL && !process.env.POSTGRES_URL) missing.push("DATABASE_URL (add Neon Postgres under the project's Storage tab)");
+  if (!process.env.DATABASE_URL && !process.env.POSTGRES_URL) missing.push("DATABASE_URL (copy the Supabase pooler URL from Dashboard -> Connect)");
   if (!process.env.MASTER_SECRET) missing.push("MASTER_SECRET (generate with: openssl rand -base64 48)");
   if (missing.length) {
-    console.error(`\nMissing environment variables:\n${missing.map((m) => `  - ${m}`).join("\n")}\nSet them in Vercel → Project → Settings → Environment Variables, then redeploy.\n`);
+    console.error(`\nMissing environment variables:\n${missing.map((m) => `  - ${m}`).join("\n")}\nSet them in .env.local and in the deployment environment, then retry.\n`);
     process.exit(1);
   }
 }

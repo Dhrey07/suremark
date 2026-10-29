@@ -59,6 +59,7 @@ export default async function PrintSheet({ params, searchParams }: { params: Pro
             lot={job.batch.lot}
             expiry={formatDate(job.batch.expiryDate)}
             state={l.state}
+            cartonCode={l.cartonCode}
           />
         ))}
       </div>

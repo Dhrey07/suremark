@@ -10,6 +10,8 @@ const LOOK: Record<VerifyResult["status"], { box: string; icon: string; iconBox:
   expired: { box: "border-red-300 bg-red-50", icon: "✕", iconBox: "bg-red-600 text-white" },
   recalled: { box: "border-red-300 bg-red-50", icon: "✕", iconBox: "bg-red-600 text-white" },
   unable_to_verify: { box: "border-slate-300 bg-slate-50", icon: "?", iconBox: "bg-slate-500 text-white" },
+  invalid_credential: { box: "border-red-300 bg-red-50", icon: "✕", iconBox: "bg-red-600 text-white" },
+  identity_not_registered: { box: "border-amber-300 bg-amber-50", icon: "!", iconBox: "bg-amber-500 text-white" },
   invalid_code: { box: "border-slate-300 bg-slate-50", icon: "?", iconBox: "bg-slate-500 text-white" },
   rate_limited: { box: "border-slate-300 bg-slate-50", icon: "…", iconBox: "bg-slate-500 text-white" },
   unavailable: { box: "border-slate-300 bg-slate-50", icon: "…", iconBox: "bg-slate-500 text-white" },
@@ -26,7 +28,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 
 export function VerifyResultView({ result }: { result: VerifyResult }) {
   const look = LOOK[result.status];
-  const showReport = ["suspicious", "not_released", "unable_to_verify", "recalled", "expired"].includes(result.status);
+  const showReport = ["suspicious", "not_released", "unable_to_verify", "invalid_credential", "identity_not_registered", "recalled", "expired"].includes(result.status);
   return (
     <div className="space-y-4" aria-live="polite">
       <div className={cx("rounded-2xl border-2 p-5", look.box)}>
@@ -52,11 +54,13 @@ export function VerifyResultView({ result }: { result: VerifyResult }) {
 
       {result.product && result.batch && result.manufacturer && (
         <div className="rounded-2xl border border-slate-200 bg-white p-5 text-sm shadow-sm">
-          <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
-            {result.manufacturer.alias} / {result.product.alias}
-          </div>
-          <div className="mt-1 text-base font-semibold text-slate-900">
-            {result.product.name} {result.product.strength}
+          <div className="flex items-start gap-4">
+            {result.product.imageUrl && <img src={result.product.imageUrl} alt="" className="size-16 rounded-xl border border-slate-200 object-cover" />}
+            <div>
+              <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{result.manufacturer.alias} / {result.product.alias}</div>
+              <div className="mt-1 text-base font-semibold text-slate-900">{result.product.brand ?? ""} {result.product.variant || result.product.name} {result.product.strength}</div>
+              <div className="mt-0.5 text-xs text-slate-500">{result.product.category}</div>
+            </div>
           </div>
           <dl className="mt-3 divide-y divide-slate-100">
             <Row label="Manufacturer">{result.manufacturer.name}</Row>
@@ -64,10 +68,19 @@ export function VerifyResultView({ result }: { result: VerifyResult }) {
               {result.product.dosageForm} · {result.product.packSize}
             </Row>
             {result.product.nafdacRegNo && <Row label="Registration no. (declared by manufacturer)">{result.product.nafdacRegNo}</Row>}
+            {result.product.regulatoryStatus && <Row label="Regulatory check">{result.product.regulatoryStatus.replaceAll("_", " ")}</Row>}
             <Row label="Batch / lot">{result.batch.lot}</Row>
+            {result.batch.cartonCode && <Row label="Carton identity"><span className="font-mono">{result.batch.cartonCode}</span></Row>}
             <Row label="Manufactured">{formatDate(result.batch.manufactureDate)}</Row>
             <Row label="Expires">{formatDate(result.batch.expiryDate)}</Row>
           </dl>
+          {result.product.regulatorySimulated && (
+            <div className="mt-3 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-violet-950">
+              <div className="font-semibold">Simulated development registry match</div>
+              <p className="mt-0.5 text-xs">This is a prototype-only test result, not an authoritative NAFDAC verification. Source: {result.product.regulatorySource}.</p>
+            </div>
+          )}
+          {!result.product.regulatorySimulated && result.product.regulatorySource && <p className="mt-3 text-xs text-slate-500">Regulatory source: {result.product.regulatorySource}</p>}
           {result.codeHint && (
             <p className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-slate-700">
               The 16-digit code printed on this pack should end in <span className="font-mono font-semibold">{result.codeHint}</span>. If it does not, do
@@ -89,8 +102,12 @@ export function VerifyResultView({ result }: { result: VerifyResult }) {
       )}
 
       <p className="text-xs text-slate-500">
-        Assurance level: issued identity only. A matching code shows the identity was issued and released; it cannot prove that this physical pack is
-        genuine. Checked {formatDate(result.checkedAt)}.
+        {result.verificationMethod === "cryptographic_qr"
+          ? "Verification method: registered QR identity. "
+          : result.verificationMethod === "numeric_lookup"
+            ? "Verification method: registered numeric identity. "
+            : "Assurance level: issued identity only. "}
+        A matching identity shows it was issued and released; it cannot prove that this physical pack has not received a copied label. Checked {formatDate(result.checkedAt)}.
       </p>
       {showReport && (
         <Link href="/report" className="inline-flex text-sm font-medium text-brand-700 underline underline-offset-4">

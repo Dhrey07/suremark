@@ -4,14 +4,22 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
     "vercel-build": "tsx scripts/migrate.ts && tsx --conditions=react-server scripts/seed.ts --if-empty && next build",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx scripts/migrate.ts",
+    "db:backfill:cuis": "tsx --conditions=react-server scripts/backfill-cuis-v1.ts",
+    "db:bootstrap-admin": "tsx --conditions=react-server scripts/bootstrap-admin.ts",
     "db:seed": "tsx --conditions=react-server scripts/seed.ts",
+    "prototype:fanta": "tsx --conditions=react-server scripts/run-fanta-prototype.ts",
+    "test:e2e:prototype": "tsx --conditions=react-server scripts/run-fanta-prototype.ts",
+    "test:e2e:browser": "playwright test",
+    "test:db:registry": "tsx scripts/test-credential-registry.ts",
+    "benchmark:cuis": "tsx --conditions=react-server scripts/benchmark-cuis.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:unit": "vitest run --config vitest.unit.config.mts"
   },
   "engines": {
     "node": "22.x"
@@ -27,6 +35,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^22.20.5",
     "@types/pg": "^8.23.1",

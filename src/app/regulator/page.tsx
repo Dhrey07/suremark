@@ -1,9 +1,8 @@
 import { BarList, DailyColumns } from "@/components/charts";
 import { riskKindLabel, Severity } from "@/components/status";
-import { Badge, Card, CardHeader, EmptyState, Notice, PageHeader, Stat, Table, Td } from "@/components/ui";
+import { Badge, Card, CardHeader, EmptyState, PageHeader, Stat, Table, Td } from "@/components/ui";
 import { formatDate, formatDateTime } from "@/lib/dates";
 import { stateName } from "@/lib/geo";
-import { kms } from "@/lib/kms";
 import { regulatorOverview } from "@/lib/regulator";
 import { requireActor } from "@/lib/session";
 
@@ -20,7 +19,6 @@ export default async function RegulatorPage() {
   const actor = await requireActor();
   const d = await regulatorOverview(actor);
   const alerts = (d.byOutcome.suspicious ?? 0) + (d.byOutcome.not_released ?? 0) + (d.byOutcome.recalled ?? 0) + (d.byOutcome.expired ?? 0);
-  const keys = kms.publicKeys();
   return (
     <>
       <PageHeader
@@ -34,7 +32,7 @@ export default async function RegulatorPage() {
         <Stat label="Active units in market" value={d.activeUnits.toLocaleString()} />
         <Stat label="Consumer checks · 30 days" value={d.totalChecks.toLocaleString()} />
         <Stat label="Warning results · 30 days" value={alerts.toLocaleString()} hint="Copied, unreleased, recalled, expired" />
-        <Stat label="Forged QR attempts · 30 days" value={d.forgedQr.toLocaleString()} hint="Invalid or unregistered signatures" />
+        <Stat label="Rejected QR attempts · 30 days" value={d.forgedQr.toLocaleString()} hint="Invalid or unregistered identities" />
       </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.4fr_1fr]">
@@ -127,20 +125,6 @@ export default async function RegulatorPage() {
         </Card>
       </div>
 
-      <div className="mt-6">
-        <Notice tone="blue" title="Independent verification">
-          QR credentials are Ed25519-signed. With the public key{keys.length > 1 ? "s" : ""} below (also at <span className="font-mono">/api/v1/keys</span>),
-          the regulator can verify any credential offline, without trusting this platform&apos;s database. A valid signature proves issuance, not that a
-          physical pack is genuine.
-          <ul className="mt-2 space-y-1 font-mono text-xs">
-            {keys.map((k) => (
-              <li key={k.kid}>
-                v{k.kid} · {k.status} · {k.x}
-              </li>
-            ))}
-          </ul>
-        </Notice>
-      </div>
     </>
   );
 }

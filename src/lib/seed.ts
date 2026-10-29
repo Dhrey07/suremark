@@ -28,6 +28,8 @@ import { verifyCode, verifyQr } from "./verify";
 
 const TABLES = [
   "audit_events",
+  "notifications",
+  "manufacturer_review_events",
   "rate_limit_buckets",
   "consumer_reports",
   "risk_cases",
@@ -48,6 +50,7 @@ const TABLES = [
   "membership_roles",
   "organization_memberships",
   "platform_roles",
+  "password_reset_tokens",
   "sessions",
   "manufacturers",
   "users",
@@ -67,8 +70,8 @@ export async function seedDemo(password: string, log: (m: string) => void = () =
   const db = getDb();
   const passwordHash = await hashPassword(password);
 
-  async function user(email: string, name: string, title: string, domain: "platform" | "regulator" | "manufacturer") {
-    const [u] = await db.insert(schema.users).values({ email, name, title, passwordHash, domain }).returning();
+  async function user(email: string, name: string, title: string, domain: "platform" | "regulator" | "manufacturer", password?: string) {
+    const [u] = await db.insert(schema.users).values({ email, name, title, passwordHash: password ? await hashPassword(password) : passwordHash, domain }).returning();
     return u;
   }
 
@@ -86,6 +89,8 @@ export async function seedDemo(password: string, log: (m: string) => void = () =
   // ---------- platform & regulator
   const admin = await user("reviewer@platform.demo", "Kemi Adebayo", "Onboarding Reviewer", "platform");
   await db.insert(schema.platformRoles).values({ userId: admin.id, roleKey: "platform_admin" });
+  const demoPlatformAdmin = await user("platform.admin@demo.test", "Amara Okoye", "Platform Administrator", "platform", "DemoPlatform2026!");
+  await db.insert(schema.platformRoles).values({ userId: demoPlatformAdmin.id, roleKey: "platform_admin" });
   const analyst = await user("analyst@regulator.demo", "Regulatory Analyst", "Post-Marketing Surveillance (demo)", "regulator");
   await db.insert(schema.platformRoles).values({ userId: analyst.id, roleKey: "regulator_analyst" });
 
@@ -159,6 +164,10 @@ export async function seedDemo(password: string, log: (m: string) => void = () =
     "org",
   ]);
   await member(okl.id, await user("kunle.ajayi@okanlife.demo", "Kunle Ajayi", "Internal Auditor", "manufacturer"), ["auditor"], ["org"]);
+  await member(okl.id, await user("manufacturer.owner@demo.test", "Demo Manufacturer Owner", "Organization Owner", "manufacturer", "DemoManufacturer2026!"), ["owner"], ["org"]);
+  await member(okl.id, await user("production.manager@demo.test", "Demo Production Manager", "Production Manager", "manufacturer", "DemoProduction2026!"), ["production_manager"], ikejaAndAgbara);
+  await member(okl.id, await user("qa.officer@demo.test", "Demo QA Officer", "Quality Assurance Officer", "manufacturer", "DemoQuality2026!"), ["qa_officer"], ikejaAndAgbara);
+  await member(okl.id, await user("line.operator@demo.test", "Demo Line Operator", "Production Line Operator", "manufacturer", "DemoOperator2026!"), ["line_operator"], [{ line: l1.id }]);
   log("Okanlife organisation, sites, products and team created");
 
   // ---------- Savannah Foods & Beverages (fictional)

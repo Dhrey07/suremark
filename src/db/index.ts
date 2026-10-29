@@ -8,9 +8,13 @@ export type DbOrTx = Database | Tx;
 
 const globalForDb = globalThis as unknown as { __upaPool?: Pool; __upaDb?: Database };
 
+export function isDatabaseConfigured(): boolean {
+  return Boolean(process.env.DATABASE_URL ?? process.env.POSTGRES_URL);
+}
+
 function createPool() {
   const url = process.env.DATABASE_URL ?? process.env.POSTGRES_URL;
-  if (!url) throw new Error("DATABASE_URL is not set");
+  if (!url) throw new Error("DATABASE_NOT_CONFIGURED");
   return new Pool({ connectionString: url, max: process.env.VERCEL ? 5 : 10 });
 }
 

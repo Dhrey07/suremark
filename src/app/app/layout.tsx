@@ -4,13 +4,14 @@ import type { NavItem } from "@/components/nav";
 import { Shell } from "@/components/shell";
 import { can, ROLES } from "@/lib/authz";
 import { pendingApprovals } from "@/lib/queries";
+import { unreadNotificationCount } from "@/lib/notifications";
 import { requireActor } from "@/lib/session";
 import { signOutAction } from "../login/actions";
 
 export const dynamic = "force-dynamic";
 
 export default async function PortalLayout({ children }: { children: React.ReactNode }) {
-  const actor = await requireActor();
+  const actor = await requireActor("/manufacturer/login");
   if (actor.domain === "platform") redirect("/platform");
   if (actor.domain === "regulator") redirect("/regulator");
   if (!actor.membership) {
@@ -29,18 +30,19 @@ export default async function PortalLayout({ children }: { children: React.React
     );
   }
 
-  const approvals = await pendingApprovals(actor);
-  const items: NavItem[] = [{ href: "/app", label: "Overview" }];
+  const [approvals, unreadNotifications] = await Promise.all([pendingApprovals(actor), unreadNotificationCount(actor)]);
+  const items: NavItem[] = [{ href: "/app", label: "Home", section: "Workspace" }];
   if (approvals.length || can(actor, "identity:allocate:approve") || can(actor, "recall:approve")) {
-    items.push({ href: "/app/approvals", label: "Approvals", badge: approvals.length });
+    items.push({ href: "/app/approvals", label: "Approvals", badge: approvals.length, section: "Workspace" });
   }
-  if (can(actor, "batch:view")) items.push({ href: "/app/batches", label: "Batches" });
-  if (can(actor, "print_job:execute")) items.push({ href: "/app/line", label: "Line jobs" });
-  items.push({ href: "/app/products", label: "Products" });
-  if (can(actor, "risk:manage")) items.push({ href: "/app/risk", label: "Alerts & cases" });
-  if (can(actor, "batch:view")) items.push({ href: "/app/recalls", label: "Recalls" });
-  if (can(actor, "team:view")) items.push({ href: "/app/team", label: "Team & access" });
-  if (can(actor, "audit:read")) items.push({ href: "/app/audit", label: "Audit log" });
+  items.push({ href: "/app/products", label: "Products", section: "Production" });
+  if (can(actor, "batch:view")) items.push({ href: "/app/batches", label: "Production runs", section: "Production" });
+  if (can(actor, "print_job:execute")) items.push({ href: "/app/line", label: "Print jobs", section: "Production" });
+  if (can(actor, "risk:manage")) items.push({ href: "/app/risk", label: "Security alerts", section: "Trust" });
+  if (can(actor, "batch:view")) items.push({ href: "/app/recalls", label: "Recalls", section: "Trust" });
+  items.push({ href: "/app/notifications", label: "Notifications", badge: unreadNotifications, section: "Organization" });
+  if (can(actor, "team:view")) items.push({ href: "/app/team", label: "Team & roles", section: "Organization" });
+  if (can(actor, "audit:read")) items.push({ href: "/app/audit", label: "Audit trail", section: "Organization" });
 
   const roleLabel = actor.membership.roles.map((r) => ROLES[r]?.label ?? r).join(", ");
   return (

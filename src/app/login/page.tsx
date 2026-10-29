@@ -43,13 +43,14 @@ async function demoAccounts() {
 }
 
 export default async function LoginPage() {
-  const accounts = env.demoMode ? await demoAccounts() : [];
+  const accounts = env.demoMode && process.env.NODE_ENV !== "production" ? await demoAccounts() : [];
   return (
-    <div className="mx-auto grid min-h-dvh max-w-6xl gap-10 px-4 py-10 lg:grid-cols-[22rem_1fr]">
-      <div className="space-y-6">
+    <div className="mx-auto grid min-h-dvh max-w-7xl gap-10 px-4 py-8 sm:px-6 lg:grid-cols-[24rem_1fr] lg:gap-16 lg:px-8 lg:py-12">
+      <div className="space-y-8">
         <Logo subtitle="Manufacturer, platform & regulator access" />
-        <ActionForm action={signInAction} className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h1 className="text-lg font-semibold text-slate-900">Sign in</h1>
+        <div><p className="text-sm font-semibold text-brand-700">Operations workspace</p><h1 className="mt-2 text-4xl font-semibold leading-tight tracking-[-0.05em] text-slate-950">Protect every product from line to shelf.</h1><p className="mt-3 text-sm leading-6 text-slate-600">Manage production, quality and trust from one secure workspace.</p></div>
+        <ActionForm action={signInAction} className="space-y-4 rounded-2xl border border-[#e6e2d8] bg-white p-6 shadow-[0_16px_50px_rgba(25,45,35,0.08)]">
+          <h2 className="text-lg font-semibold text-slate-900">Sign in to Suremark</h2>
           <Field label="Email">
             <input name="email" type="email" required autoComplete="username" className={inputClass} />
           </Field>
@@ -68,9 +69,9 @@ export default async function LoginPage() {
           <p className="mt-1 text-sm text-slate-600">
             One click signs in as that person. Each account only sees and does what its role and assigned sites allow — the server checks every action.
           </p>
-          <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <div className="mt-4 grid gap-4 xl:grid-cols-2">
             {accounts.map(([group, people]) => (
-              <div key={group} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div key={group} className="rounded-2xl border border-[#e6e2d8] bg-white p-4 shadow-sm">
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{group}</div>
                 <ul className="mt-2 divide-y divide-slate-100">
                   {people.map((p) => (

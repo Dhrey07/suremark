@@ -103,6 +103,7 @@ export async function decideRecall(actor: Actor, recallId: string, approve: bool
         .returning({ id: schema.units.id });
       recalledUnits = updated.length;
       await tx.update(schema.batches).set({ status: "recalled" }).where(eq(schema.batches.id, batch.id));
+      await tx.update(schema.cartons).set({ status: "recalled" }).where(eq(schema.cartons.batchId, batch.id));
     }
     await appendAudit(tx, {
       manufacturerId,

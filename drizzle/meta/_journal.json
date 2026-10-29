@@ -15,6 +15,69 @@
       "when": 1792888550415,
       "tag": "0001_append_only_guards",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792890000000,
+      "tag": "0002_governance_notifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792891000000,
+      "tag": "0003_password_reset",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792892000000,
+      "tag": "0004_supabase_api_lockdown",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792893000000,
+      "tag": "0005_product_packaging_cartons",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792980000000,
+      "tag": "0006_product_batch_workspace",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793070000000,
+      "tag": "0007_cuis_v1",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793156400000,
+      "tag": "0008_credential_registry",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1793158200000,
+      "tag": "0009_registry_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793160000000,
+      "tag": "0010_signing_key_lifecycle",
+      "breakpoints": true
     }
   ]
 }

@@ -49,7 +49,7 @@ export default async function PrintJobPage({ params }: { params: Promise<{ id: s
             </Badge>
           </span>
         }
-        description={`${product.name} ${product.strength} · ${line.name} · ${job.quantity.toLocaleString()} labels · signing key v${job.keyVersion}`}
+        description={`${product.name} ${product.strength} · ${line.name} · ${job.quantity.toLocaleString()} labels`}
         action={<Link href={`/app/batches/${batch.id}`} className={buttonClass("secondary", "sm")}>View batch</Link>}
       />
 
@@ -88,7 +88,7 @@ export default async function PrintJobPage({ params }: { params: Promise<{ id: s
               <Card>
                 <CardHeader
                   title="2. Run the line (simulated printer + inline camera)"
-                  description="The camera reads every label: it decodes the QR, verifies its Ed25519 signature and checks the code's check digit. Unreadable labels are rejected and their identities retired."
+                  description="The camera validates every label. Unreadable or invalid labels are rejected and their identities retired."
                 />
                 <ActionForm action={runLineAction} className="grid gap-4 p-5 sm:grid-cols-2">
                   <input type="hidden" name="jobId" value={job.id} />

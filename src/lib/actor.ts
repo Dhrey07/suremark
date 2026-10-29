@@ -23,13 +23,14 @@ export async function loadActor(db: DbOrTx, userId: string, activeManufacturerId
         manufacturerName: schema.manufacturers.legalName,
         manufacturerAlias: schema.manufacturers.alias,
         kybStatus: schema.manufacturers.kybStatus,
+        operationalStatus: schema.manufacturers.operationalStatus,
       })
       .from(schema.organizationMemberships)
       .innerJoin(schema.manufacturers, eq(schema.manufacturers.id, schema.organizationMemberships.manufacturerId))
       .where(and(eq(schema.organizationMemberships.userId, userId), eq(schema.organizationMemberships.active, true)));
     const active = rows.find((r) => r.manufacturerId === activeManufacturerId) ?? rows[0];
     // A tenant that has not passed onboarding review grants no operational access.
-    if (active && active.kybStatus === "approved") {
+    if (active && active.kybStatus === "approved" && active.operationalStatus === "active") {
       const [roles, grants] = await Promise.all([
         db.select({ roleKey: schema.membershipRoles.roleKey }).from(schema.membershipRoles).where(eq(schema.membershipRoles.membershipId, active.id)),
         db

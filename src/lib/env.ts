@@ -18,6 +18,14 @@ export const env = {
     if (!Number.isInteger(v) || v < 1 || v > 255) throw new Error("SIGNING_KEY_VERSION must be 1-255");
     return v;
   },
+  get cuisKeyProvider(): "development" | "managed" {
+    const provider = process.env.CUIS_KEY_PROVIDER ?? "development";
+    if (provider !== "development" && provider !== "managed") throw new Error("CUIS_KEY_PROVIDER must be development or managed");
+    if (process.env.NODE_ENV === "production" && provider === "development") {
+      throw new Error("The CUIS development key provider is disabled in production");
+    }
+    return provider;
+  },
   // Key versions that must no longer verify (comma separated), e.g. after a compromise.
   get revokedKeyVersions(): Set<number> {
     return new Set(

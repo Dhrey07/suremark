@@ -1,13 +1,15 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ActionForm, SubmitButton } from "@/components/action-form";
+import { CopyButton } from "@/components/copy-button";
 import { BatchStatus, UNIT_STATES } from "@/components/status";
 import { ButtonLink, Card, CardHeader, cx, Field, inputClass, Notice, PageHeader } from "@/components/ui";
 import { can, type Actor } from "@/lib/authz";
 import { formatDate, formatDateTime } from "@/lib/dates";
 import { DomainError } from "@/lib/errors";
 import { stateName } from "@/lib/geo";
-import { getBatchDetail } from "@/lib/queries";
+import { getBatchDetail, getBatchUnits } from "@/lib/queries";
+import { publicBaseUrl } from "@/lib/request-context";
 import { requireActor } from "@/lib/session";
 import {
   decideAllocationAction,
@@ -19,6 +21,7 @@ import {
 } from "../../actions";
 
 type Detail = Awaited<ReturnType<typeof getBatchDetail>>;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const ACTION_LABELS: Record<string, string> = {
   "batch.create": "Batch drafted",
@@ -87,7 +90,7 @@ function ActionPanel({ actor, d }: { actor: Actor; d: Detail }) {
       <ActionForm action={requestAllocationAction} className="space-y-3">
         <input type="hidden" name="batchId" value={batch.id} />
         <Field label="Identities to request" hint={`Up to ${max.toLocaleString()} (planned quantity + 10% spoilage allowance).`}>
-          <input name="quantity" type="number" min={1} max={max} defaultValue={max} required className={inputClass} />
+          <input name="quantity" type="number" min={1} max={max} defaultValue={batch.plannedQuantity} required className={inputClass} />
         </Field>
         <Field label="Note for the approver (optional)">
           <input name="reason" className={inputClass} placeholder="e.g. Scheduled run, roll of 1,000 labels" />
@@ -242,8 +245,8 @@ function ActionPanel({ actor, d }: { actor: Actor; d: Detail }) {
   return null;
 }
 
-export default async function BatchPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
+export default async function BatchPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string; carton?: string; loose?: string; page?: string }> }) {
+  const [{ id }, sp] = await Promise.all([params, searchParams]);
   const actor = await requireActor();
   let d: Detail;
   try {
@@ -254,6 +257,20 @@ export default async function BatchPage({ params }: { params: Promise<{ id: stri
   }
   const { batch, product } = d;
   const total = Object.values(d.counts).reduce((a, b) => a + b, 0);
+  const tab = ["overview", "units", "print", "quality", "activity"].includes(sp.tab ?? "") ? sp.tab! : "overview";
+  const page = Math.max(1, Number.parseInt(sp.page ?? "1", 10) || 1);
+  const cartonId = sp.carton && UUID_RE.test(sp.carton) ? sp.carton : undefined;
+  const unitPage = tab === "units" ? await getBatchUnits(actor, id, { cartonId, loose: sp.loose === "1", page, pageSize: 24 }) : null;
+  const allCodes = tab === "print" && total <= 1000 ? await getBatchUnits(actor, id, { pageSize: 1000 }) : null;
+  const baseUrl = tab === "print" ? await publicBaseUrl() : "";
+  const createdBy = `${batch.createdByRole} — ${batch.createdByName}`;
+  const batchSummary = [
+    `Manufacturer: ${d.manufacturer.legalName}`, `Manufacturer Prefix: ${d.manufacturer.alias}`, `Product: ${product.name}`, `Product Code: ${product.alias}`, `Batch: ${batch.lot}`,
+    `Cartons: ${batch.cartonCount ?? 0}`, `Units per Carton: ${batch.unitsPerCarton ?? 0}`, `Loose Units: ${batch.looseUnits}`, `Total Units: ${batch.plannedQuantity}`,
+    `Manufactured: ${formatDate(batch.manufactureDate)}`, `Expires: ${formatDate(batch.expiryDate)}`, `Factory: ${d.factory.name}`, `Production Line: ${d.line.name}`,
+    `Created By: ${createdBy}`, `Created: ${formatDateTime(batch.createdAt)}`,
+  ].join("\n");
+  const tabs = [{ key: "overview", label: "Overview" }, { key: "units", label: "Cartons & Units" }, { key: "print", label: "Print & Export" }, { key: "quality", label: "Quality Review" }, { key: "activity", label: "Activity History" }];
   return (
     <>
       <PageHeader
@@ -264,12 +281,16 @@ export default async function BatchPage({ params }: { params: Promise<{ id: stri
             <BatchStatus status={batch.status} />
           </span>
         }
-        description={`${product.name} ${product.strength} · ${product.packSize} · ${d.factory.name}, ${d.line.name}`}
+        description={`${product.name} ${product.variant || product.strength} · ${d.factory.name}, ${d.line.name} · created ${formatDateTime(batch.createdAt)}`}
+        action={batch.status === "allocated" && d.job && can(actor, "print_job:execute", batch) ? <ButtonLink href={`/app/print-jobs/${d.job.id}`}>Continue printing</ButtonLink> : <ButtonLink href={`/app/products/${product.id}`} variant="secondary">View product</ButtonLink>}
       />
       <Card className="mb-6 px-5 py-4">
         <Steps status={batch.status} counts={d.counts} />
       </Card>
-      <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr]">
+      <nav className="mb-6 flex gap-1 overflow-x-auto rounded-2xl border border-[#e6e2d8] bg-white p-1.5" aria-label="Batch workspace">
+        {tabs.map((item) => <Link key={item.key} href={`?tab=${item.key}`} className={cx("whitespace-nowrap rounded-xl px-4 py-2.5 text-sm font-semibold", tab === item.key ? "bg-[#10261e] text-white" : "text-slate-600 hover:bg-slate-50")}>{item.label}</Link>)}
+      </nav>
+      {tab === "overview" && <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr]">
         <div className="space-y-6">
           <Card>
             <CardHeader title="Next step" />
@@ -277,6 +298,21 @@ export default async function BatchPage({ params }: { params: Promise<{ id: stri
               <ActionPanel actor={actor} d={d} />
             </div>
           </Card>
+          {batch.cartonCount && (
+            <Card>
+              <CardHeader title="Carton hierarchy" description={`${batch.cartonCount} distinct carton identities · ${batch.unitsPerCarton} units expected in each carton`} />
+              {d.cartons.length ? (
+                <div className="grid gap-px bg-slate-100 sm:grid-cols-2">
+                  {d.cartons.map((carton) => (
+                    <div key={carton.id} className="bg-white px-5 py-3 text-sm">
+                      <div className="flex items-center justify-between gap-3"><span className="font-mono font-semibold text-slate-900">{carton.code}</span><span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs capitalize text-slate-600">{carton.status}</span></div>
+                      <div className="mt-1 text-xs text-slate-500">Carton {carton.cartonIndex} · {carton.expectedUnits} units · {carton.cuisCredential ? "Registered" : "Pending registration"}</div>
+                    </div>
+                  ))}
+                </div>
+              ) : <div className="px-5 py-4 text-sm text-slate-500">Carton identities will be generated together with the approved unit identities.</div>}
+            </Card>
+          )}
           <Card>
             <CardHeader
               title="Unit identities"
@@ -315,11 +351,16 @@ export default async function BatchPage({ params }: { params: Promise<{ id: stri
                 ["Manufactured", formatDate(batch.manufactureDate)],
                 ["Expires", formatDate(batch.expiryDate)],
                 ["Planned quantity", batch.plannedQuantity.toLocaleString()],
+                ["Packaging", batch.unitsPerCarton ? `${batch.cartonCount ?? 0} cartons × ${batch.unitsPerCarton} units + ${batch.looseUnits} loose` : "Legacy unit plan"],
                 ["Site", `${d.factory.name} (${stateName(d.factory.state)})`],
                 ["Line", d.line.name],
-                ["Created by", d.userName[batch.createdBy]],
+                ["Created by", createdBy],
+                ["Created on", formatDateTime(batch.createdAt)],
+                ["Organization", d.manufacturer.legalName],
+                ["Last modified by", batch.lastModifiedBy ? d.userName[batch.lastModifiedBy] : batch.createdByName],
+                ["Last modified", formatDateTime(batch.updatedAt)],
                 ["Released by", batch.releasedBy ? `${d.userName[batch.releasedBy]} · ${formatDateTime(batch.releasedAt)}` : "—"],
-                ["Signing key", d.job ? `Ed25519 v${d.job.keyVersion}` : "—"],
+                ["Batch identity", batch.cuisCredential ? "Registered" : "Pending registration"],
                 ["Manifest hash", d.job && d.job.manifestHash.some((b) => b) ? `${d.job.manifestHash.toString("hex").slice(0, 24)}…` : "—"],
               ].map(([k, v]) => (
                 <div key={k} className="flex justify-between gap-4 px-5 py-2.5">
@@ -349,7 +390,60 @@ export default async function BatchPage({ params }: { params: Promise<{ id: stri
             </ol>
           </Card>
         </div>
-      </div>
+      </div>}
+
+      {tab === "units" && <div className="grid gap-6 lg:grid-cols-[.8fr_1.2fr]">
+        <Card>
+          <CardHeader title="Cartons" description={`${d.cartons.length} generated · ${batch.looseUnits} loose units`} />
+          {d.cartons.length ? <div className="max-h-[680px] divide-y divide-slate-100 overflow-y-auto">{d.cartons.map((carton) => (
+            <Link key={carton.id} href={`?tab=units&carton=${carton.id}`} className={cx("block px-5 py-3 hover:bg-[#f8faf5]", cartonId === carton.id && "bg-[#eef7e5]")}>
+              <div className="flex items-center justify-between gap-3"><span className="font-mono text-sm font-semibold text-slate-900">{carton.code}</span><span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs capitalize">{carton.status}</span></div>
+              <div className="mt-1 text-xs text-slate-500">Carton {String(carton.cartonIndex).padStart(3, "0")} · {carton.expectedUnits} units · {carton.cuisCredential ? "Registered" : "Pending registration"}</div>
+            </Link>
+          ))}</div> : <div className="p-5 text-sm text-slate-500">Carton identities appear after allocation approval.</div>}
+          {batch.looseUnits > 0 && <Link href="?tab=units&loose=1" className={cx("block border-t border-slate-100 px-5 py-4 text-sm font-semibold", sp.loose === "1" && "bg-[#eef7e5]")}>Loose units · {batch.looseUnits}</Link>}
+        </Card>
+        <Card>
+          <CardHeader title={cartonId ? d.cartons.find((c) => c.id === cartonId)?.code ?? "Carton units" : sp.loose === "1" ? "Loose units" : "All unit identities"} description={unitPage ? `${unitPage.total.toLocaleString()} units · page ${unitPage.page} of ${Math.max(1, Math.ceil(unitPage.total / unitPage.pageSize))}` : undefined} action={cartonId ? <ButtonLink href={`/api/batches/${id}/export?format=units&cartonIds=${cartonId}`} size="sm" variant="secondary">Print this carton</ButtonLink> : undefined} />
+          {unitPage?.rows.length ? <>
+            <div className="grid gap-px bg-slate-100 sm:grid-cols-2">{unitPage.rows.map((unit) => (
+              <Link key={unit.id} href={`/app/units/${unit.id}`} className="bg-white p-4 hover:bg-[#f8faf5]">
+                <div className="flex items-center justify-between gap-3"><span className="font-mono text-sm font-bold text-brand-800">Unit {String(unit.labelIndex).padStart(4, "0")}</span><span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">{unit.state.replaceAll("_", " ")}</span></div>
+                <div className="mt-2 font-mono text-sm tracking-wide text-slate-900">{unit.code ? unit.code.replace(/(.{4})/g, "$1 ").trim() : "Restricted"}</div>
+                <div className="mt-1 text-xs text-slate-500">{unit.cartonCode ?? "Loose unit"}</div>
+              </Link>
+            ))}</div>
+            <div className="flex items-center justify-between border-t border-slate-100 p-4 text-sm"><span>{unitPage.total.toLocaleString()} records</span><div className="flex gap-2">{page > 1 && <Link className="rounded-lg border px-3 py-1.5" href={`?tab=units${cartonId ? `&carton=${cartonId}` : sp.loose === "1" ? "&loose=1" : ""}&page=${page - 1}`}>Previous</Link>}{page * unitPage.pageSize < unitPage.total && <Link className="rounded-lg border px-3 py-1.5" href={`?tab=units${cartonId ? `&carton=${cartonId}` : sp.loose === "1" ? "&loose=1" : ""}&page=${page + 1}`}>Next</Link>}</div></div>
+          </> : <div className="p-8 text-center text-sm text-slate-500">No unit identities in this selection yet.</div>}
+        </Card>
+      </div>}
+
+      {tab === "print" && <div className="grid gap-6 lg:grid-cols-[1.1fr_.9fr]">
+        <Card>
+          <CardHeader title="Print-ready output" description="Generated from the exact persisted identity records" />
+          <div className="grid gap-3 p-5 sm:grid-cols-2">
+            <ButtonLink href={`/api/batches/${id}/export?format=units`}>Download unit-label PDF</ButtonLink>
+            <ButtonLink href={`/api/batches/${id}/export?format=cartons`} variant="secondary">Download carton-label PDF</ButtonLink>
+            <ButtonLink href={`/api/batches/${id}/export?format=summary`} variant="secondary">Download batch summary PDF</ButtonLink>
+            <ButtonLink href={`/api/batches/${id}/export?format=csv`} variant="secondary">Export CSV</ButtonLink>
+            {d.job && can(actor, "print_job:execute", batch) && <ButtonLink href={`/app/print-jobs/${d.job.id}/labels`} variant="secondary">Open print preview</ButtonLink>}
+            <CopyButton value={batchSummary}>Copy batch information</CopyButton>
+            {allCodes && allCodes.rows.length === total && <CopyButton value={allCodes.rows.map((unit) => [batch.lot, unit.cartonCode ?? "LOOSE", `UNIT-${String(unit.labelIndex).padStart(4, "0")}`, unit.code, `${baseUrl}/v/${unit.payload}`].join("\t")).join("\n")}>Copy all batch codes</CopyButton>}
+          </div>
+          <div className="border-t border-slate-100 px-5 py-4 text-xs leading-5 text-slate-500">Downloads are tenant-scoped, audited, deterministically ordered and recorded as short-lived export jobs. Generating a file does not mark any physical label as printed.</div>
+        </Card>
+        <Card><CardHeader title="Export history" description="Latest audited requests" /><div className="divide-y divide-slate-100">{d.exports.length ? d.exports.map((job) => <div key={job.id} className="px-5 py-3 text-sm"><div className="flex justify-between gap-3"><span className="font-medium text-slate-900">{job.type.replaceAll("_", " ")}</span><span className="capitalize text-slate-500">{job.status}</span></div><div className="mt-1 text-xs text-slate-500">{formatDateTime(job.createdAt)} · {job.recordCount ?? "—"} records</div></div>) : <div className="p-5 text-sm text-slate-500">No exports have been generated.</div>}</div></Card>
+      </div>}
+
+      {tab === "quality" && <div className="grid gap-6 lg:grid-cols-2">
+        <Card><CardHeader title="Quality review & release" /><div className="p-5"><ActionPanel actor={actor} d={d} /></div></Card>
+        <Card><CardHeader title="Reconciliation" />{d.reconciliation ? <div className="space-y-3 p-5 text-sm text-slate-700"><p>Performed by <strong>{d.userName[d.reconciliation.performedBy]}</strong> on {formatDateTime(d.reconciliation.createdAt)}.</p><p className="rounded-xl bg-[#eef7e5] p-4 tabular">{d.reconciliation.issued} issued = {d.reconciliation.printed} printed + {d.reconciliation.rejected} rejected + {d.reconciliation.voided} voided</p><p>Physical finished-unit count: <strong>{d.reconciliation.physicalCount}</strong></p></div> : <div className="p-5 text-sm text-slate-500">Reconciliation has not been completed.</div>}</Card>
+      </div>}
+
+      {tab === "activity" && <Card>
+        <CardHeader title="Complete activity history" description="Immutable actor IDs, timestamps and workflow outcomes from the tamper-evident audit log" />
+        <ol className="divide-y divide-slate-100">{d.activity.map((e) => <li key={e.seq} className="px-5 py-3 text-sm"><div className="flex flex-wrap items-baseline justify-between gap-3"><span className={cx("font-medium", e.decision === "deny" ? "text-red-700" : "text-slate-900")}>{ACTION_LABELS[e.action] ?? e.action}</span><span className="tabular text-xs text-slate-500">{formatDateTime(e.occurredAt)}</span></div><div className="mt-1 text-xs text-slate-500">{e.actorId ? `${d.userTitle[e.actorId] ?? "User"} — ${d.userName[e.actorId]}` : "System"}{describe(e.detail) && ` · ${describe(e.detail)}`}</div></li>)}</ol>
+      </Card>}
     </>
   );
 }

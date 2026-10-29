@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 480" role="img" aria-labelledby="title desc">
+  <title id="title">Orange soft drink bottle</title><desc id="desc">A stylized orange beverage bottle used as prototype product artwork.</desc>
+  <defs><linearGradient id="b" x1="0" x2="1"><stop stop-color="#f28b18"/><stop offset=".5" stop-color="#ffad24"/><stop offset="1" stop-color="#e76d0b"/></linearGradient></defs>
+  <rect width="480" height="480" rx="64" fill="#fff7e8"/>
+  <path d="M194 48h92v57c0 21 22 35 36 53 22 29 27 65 27 111v119c0 28-23 50-50 50H181c-28 0-50-22-50-50V269c0-46 5-82 27-111 14-18 36-32 36-53z" fill="url(#b)" stroke="#ca5700" stroke-width="8"/>
+  <rect x="188" y="35" width="104" height="42" rx="10" fill="#126b3e"/>
+  <path d="M131 254c58-28 159-28 218 0v100c-59 26-160 26-218 0z" fill="#fff" opacity=".95"/>
+  <circle cx="240" cy="304" r="58" fill="#f58220"/><path d="M240 246a58 58 0 0 1 51 86l-51-28z" fill="#ffd451"/><path d="M240 304l-51 28a58 58 0 0 1 0-56z" fill="#ffb622"/>
+  <path d="M215 222c18-28 43-38 74-31-16 24-40 35-74 31z" fill="#198754"/>
+  <text x="240" y="382" text-anchor="middle" font-family="Arial,sans-serif" font-size="22" font-weight="700" fill="#713400">ORANGE · 50 cl</text>
+</svg>

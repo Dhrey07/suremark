@@ -12,13 +12,14 @@ export default async function BatchesPage() {
   return (
     <>
       <PageHeader
-        title="Batches"
-        description="Each batch moves through issuance, printing, reconciliation and QA release. Units become verifiable only after release."
-        action={can(actor, "batch:create") && <ButtonLink href="/app/batches/new">New batch</ButtonLink>}
+        eyebrow="Production"
+        title="Production runs"
+        description="Follow each run from setup and code allocation through printing, quality review and release."
+        action={can(actor, "batch:create") && <ButtonLink href="/app/batches/new">Start production run</ButtonLink>}
       />
       <Card>
         {batches.length === 0 ? (
-          <EmptyState>No batches in your scope.</EmptyState>
+          <EmptyState>No production runs in your assigned sites yet.</EmptyState>
         ) : (
           <Table head={["Lot", "Product", "Site / line", "Planned", "Status", "Expiry"]}>
             {batches.map((b) => (

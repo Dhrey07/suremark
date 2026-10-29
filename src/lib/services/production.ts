@@ -1,10 +1,12 @@
-import { randomBytes, createHash, randomInt } from "node:crypto";
-import { and, asc, count, eq, inArray } from "drizzle-orm";
+import { randomBytes, createHash, randomInt, randomUUID } from "node:crypto";
+import { and, asc, count, eq, inArray, like, sql } from "drizzle-orm";
 import { getDb, schema, type Tx } from "@/db";
 import { appendAudit, recordDenial } from "../audit";
-import { authorize, requireIndependent, type Actor, type Scope } from "../authz";
+import { authorize, requireIndependent, ROLES, type Actor, type Scope } from "../authz";
 import { CODE_NAMESPACE, checkCode, generateCode } from "../codes";
 import { buildPayload, CREDENTIAL_FORMAT_VERSION, decodeAndVerify, signClaims } from "../credential";
+import { decodeAndVerifyCuis, issueCuisCredential, looksLikeCuisCredential } from "../cuis";
+import { registerCuisCredentials } from "../credential-registry";
 import { isUniqueViolation, uuidFrom } from "../db-errors";
 import { conflict, forbidden, invalid, notFound } from "../errors";
 import { kms } from "../kms";
@@ -32,6 +34,8 @@ async function loadBatch(tx: Tx, actor: Actor, batchId: string, lock = false) {
     .where(and(eq(schema.batches.id, batchId), eq(schema.batches.manufacturerId, tenantOf(actor))));
   const [batch] = lock ? await q.for("update") : await q;
   if (!batch) throw notFound("Batch not found");
+  const [manufacturer] = await tx.select({ status: schema.manufacturers.operationalStatus }).from(schema.manufacturers).where(eq(schema.manufacturers.id, batch.manufacturerId));
+  if (!manufacturer || manufacturer.status !== "active") throw forbidden("Manufacturer operations are suspended.");
   return batch;
 }
 
@@ -50,71 +54,169 @@ async function loadJob(tx: Tx, actor: Actor, jobId: string, lock = false) {
 export type CreateBatchInput = {
   productId: string;
   lineId: string;
-  lot: string;
+  lot?: string;
   manufactureDate: string;
   expiryDate: string;
-  plannedQuantity: number;
+  plannedQuantity?: number;
+  packagingVersionId?: string;
+  cartonCount?: number;
+  looseUnits?: number;
+  productionNotes?: string;
+  batchGroupId?: string;
 };
 
-export async function createBatch(actor: Actor, input: CreateBatchInput) {
+async function automaticBatchReference(tx: Tx, manufacturerAlias: string, productAlias: string, manufactureDate: string) {
+  const base = `${manufacturerAlias}-${productAlias}-${manufactureDate.replaceAll("-", "")}`;
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${base}))`);
+  const existing = await tx
+    .select({ lot: schema.batches.lot })
+    .from(schema.batches)
+    .where(like(schema.batches.lot, `${base}-%`));
+  const highest = existing.reduce((max, row) => {
+    const suffix = Number.parseInt(row.lot.slice(base.length + 1), 10);
+    return Number.isInteger(suffix) ? Math.max(max, suffix) : max;
+  }, 0);
+  return `${base}-${String(highest + 1).padStart(3, "0")}`;
+}
+
+async function createBatchRow(tx: Tx, actor: Actor, input: CreateBatchInput) {
   const manufacturerId = tenantOf(actor);
-  const lot = input.lot.trim().toUpperCase();
-  if (!/^[A-Z0-9\-\/]{3,32}$/.test(lot)) throw invalid("Lot must be 3-32 characters: letters, digits, '-' or '/'.");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.manufactureDate) || !/^\d{4}-\d{2}-\d{2}$/.test(input.expiryDate)) {
     throw invalid("Enter valid manufacturing and expiry dates.");
   }
   if (input.expiryDate <= input.manufactureDate) throw invalid("Expiry date must be after the manufacturing date.");
   if (input.expiryDate <= lagosToday()) throw invalid("Expiry date must be in the future.");
-  if (!Number.isInteger(input.plannedQuantity) || input.plannedQuantity < 1 || input.plannedQuantity > MAX_ALLOCATION) {
+  const [manufacturer] = await tx.select({ status: schema.manufacturers.operationalStatus, alias: schema.manufacturers.alias }).from(schema.manufacturers).where(eq(schema.manufacturers.id, manufacturerId));
+  if (!manufacturer || manufacturer.status !== "active") throw forbidden("Manufacturer operations are suspended.");
+  const [line] = await tx
+    .select()
+    .from(schema.productionLines)
+    .where(and(eq(schema.productionLines.id, input.lineId), eq(schema.productionLines.manufacturerId, manufacturerId)));
+  if (!line || !line.active) throw notFound("Production line not found");
+  const [product] = await tx
+    .select()
+    .from(schema.products)
+    .where(and(eq(schema.products.id, input.productId), eq(schema.products.manufacturerId, manufacturerId)));
+  if (!product) throw notFound("Product not found");
+  if (product.status !== "approved") throw conflict("This product has not been approved for issuance yet.");
+  const lot = input.lot?.trim()
+    ? input.lot.trim().toUpperCase()
+    : await automaticBatchReference(tx, manufacturer.alias, product.alias, input.manufactureDate);
+  if (!/^[A-Z0-9\-\/]{3,32}$/.test(lot)) throw invalid("Batch reference must be 3-32 characters: letters, digits, '-' or '/'.");
+
+  let packaging: typeof schema.packagingVersions.$inferSelect | undefined;
+  if (input.packagingVersionId) {
+    [packaging] = await tx
+      .select()
+      .from(schema.packagingVersions)
+      .where(
+        and(
+          eq(schema.packagingVersions.id, input.packagingVersionId),
+          eq(schema.packagingVersions.productId, product.id),
+          eq(schema.packagingVersions.manufacturerId, manufacturerId),
+          eq(schema.packagingVersions.active, true),
+        ),
+      );
+    if (!packaging) throw notFound("Active packaging version not found for this product.");
+    if (!Number.isInteger(input.cartonCount) || (input.cartonCount ?? 0) < 0 || (input.cartonCount ?? 0) > 10000) {
+      throw invalid("Cartons per batch must be between 0 and 10,000.");
+    }
+    if (!Number.isInteger(input.looseUnits ?? 0) || (input.looseUnits ?? 0) < 0 || (input.looseUnits ?? 0) > MAX_ALLOCATION) throw invalid("Loose units must be a whole number between 0 and 5,000.");
+    const calculated = packaging.unitsPerCarton * input.cartonCount! + (input.looseUnits ?? 0);
+    if (input.plannedQuantity !== undefined && input.plannedQuantity !== calculated) throw invalid(`Planned quantity must equal ${input.cartonCount} cartons × ${packaging.unitsPerCarton} units + ${input.looseUnits ?? 0} loose units (${calculated}).`);
+    input.plannedQuantity = calculated;
+  }
+  if (!Number.isInteger(input.plannedQuantity) || input.plannedQuantity! < 1 || input.plannedQuantity! > MAX_ALLOCATION) {
     throw invalid(`Planned quantity must be between 1 and ${MAX_ALLOCATION} in this prototype.`);
   }
 
-  return getDb().transaction(async (tx) => {
-    const [line] = await tx
-      .select()
-      .from(schema.productionLines)
-      .where(and(eq(schema.productionLines.id, input.lineId), eq(schema.productionLines.manufacturerId, manufacturerId)));
-    if (!line || !line.active) throw notFound("Production line not found");
-    const [product] = await tx
-      .select()
-      .from(schema.products)
-      .where(and(eq(schema.products.id, input.productId), eq(schema.products.manufacturerId, manufacturerId)));
-    if (!product) throw notFound("Product not found");
-    if (product.status !== "approved") throw conflict("This product has not been approved for issuance yet.");
+  const scope = { manufacturerId, factoryId: line.factoryId, lineId: line.id };
+  await authorize(actor, "batch:create", scope);
 
-    const scope = { manufacturerId, factoryId: line.factoryId, lineId: line.id };
-    await authorize(actor, "batch:create", scope);
-
-    try {
-      const [batch] = await tx
-        .insert(schema.batches)
-        .values({
-          manufacturerId,
-          productId: product.id,
-          factoryId: line.factoryId,
-          lineId: line.id,
-          lot,
-          manufactureDate: input.manufactureDate,
-          expiryDate: input.expiryDate,
-          plannedQuantity: input.plannedQuantity,
-          createdBy: actor.userId,
-        })
-        .returning();
-      await appendAudit(tx, {
+  try {
+    const batchId = randomUUID();
+    const cuis = issueCuisCredential({ type: "batch", manufacturerId, productId: product.id });
+    const [batch] = await tx
+      .insert(schema.batches)
+      .values({
+        id: batchId,
         manufacturerId,
-        actorType: "user",
-        actorId: actor.userId,
-        action: "batch.create",
-        resourceType: "batch",
-        resourceId: batch.id,
-        decision: "allow",
-        detail: { lot, product: product.alias, plannedQuantity: input.plannedQuantity },
-      });
-      return batch;
-    } catch (err) {
-      if (isUniqueViolation(err)) throw conflict(`Lot ${lot} already exists for this product.`);
-      throw err;
+        productId: product.id,
+        factoryId: line.factoryId,
+        lineId: line.id,
+        lot,
+        cuisVersion: cuis.version,
+        cuisKeyVersion: cuis.keyVersion,
+        cuisRandomIdentity: cuis.randomIdentity,
+        cuisAuthTag: cuis.authTag,
+        cuisCredential: cuis.payload,
+        manufactureDate: input.manufactureDate,
+        expiryDate: input.expiryDate,
+        plannedQuantity: input.plannedQuantity!,
+        packagingVersionId: packaging?.id,
+        unitsPerCarton: packaging?.unitsPerCarton,
+        cartonCount: packaging ? input.cartonCount : undefined,
+        looseUnits: packaging ? input.looseUnits ?? 0 : 0,
+        productionNotes: input.productionNotes?.trim() || null,
+        batchGroupId: input.batchGroupId,
+        createdBy: actor.userId,
+        createdByName: actor.name,
+        createdByRole: actor.title || actor.membership?.roles.map((role) => ROLES[role]?.label).filter(Boolean).join(", ") || "Manufacturer user",
+        lastModifiedBy: actor.userId,
+      })
+      .returning();
+    await registerCuisCredentials(tx, [{ type: "batch", subjectId: batch.id, credential: cuis, createdBy: actor.userId }]);
+    await appendAudit(tx, {
+      manufacturerId,
+      actorType: "user",
+      actorId: actor.userId,
+      action: "batch.create",
+      resourceType: "batch",
+      resourceId: batch.id,
+      decision: "allow",
+      detail: { lot, product: product.alias, plannedQuantity: input.plannedQuantity, cartonCount: input.cartonCount, looseUnits: input.looseUnits ?? 0, unitsPerCarton: packaging?.unitsPerCarton, batchGroupId: input.batchGroupId, creatorName: actor.name, creatorRole: actor.title, credentialProtocol: "CUIS", credentialVersion: cuis.version, keyVersion: cuis.keyVersion },
+    });
+    return batch;
+  } catch (err) {
+    if (isUniqueViolation(err)) throw conflict(`Lot ${lot} already exists for this product.`);
+    throw err;
+  }
+}
+
+export async function createBatch(actor: Actor, input: CreateBatchInput) {
+  return getDb().transaction((tx) => createBatchRow(tx, actor, input));
+}
+
+export type CreateBatchSetInput = Omit<CreateBatchInput, "lot" | "plannedQuantity" | "batchGroupId"> & {
+  lotPrefix: string;
+  batchCount: number;
+  cartonCount: number;
+};
+
+/** Creates a related set atomically so a partial multi-batch production plan cannot be left behind. */
+export async function createBatchSet(actor: Actor, input: CreateBatchSetInput) {
+  if (!Number.isInteger(input.batchCount) || input.batchCount < 1 || input.batchCount > 20) throw invalid("Create between 1 and 20 batches at once.");
+  const groupId = randomUUID();
+  return getDb().transaction(async (tx) => {
+    const [packaging] = await tx
+      .select()
+      .from(schema.packagingVersions)
+      .where(and(eq(schema.packagingVersions.id, input.packagingVersionId ?? ""), eq(schema.packagingVersions.productId, input.productId), eq(schema.packagingVersions.active, true)));
+    if (!packaging) throw notFound("Select an active packaging version.");
+    const plannedQuantity = packaging.unitsPerCarton * input.cartonCount + (input.looseUnits ?? 0);
+    const batches = [];
+    for (let i = 1; i <= input.batchCount; i++) {
+      batches.push(
+        await createBatchRow(tx, actor, {
+          ...input,
+          batchGroupId: groupId,
+          plannedQuantity,
+          looseUnits: input.looseUnits ?? 0,
+          lot: `${input.lotPrefix.trim().toUpperCase()}-${String(i).padStart(2, "0")}`,
+        }),
+      );
     }
+    return { groupId, batches, plannedQuantity, totalUnits: plannedQuantity * input.batchCount, totalCartons: input.cartonCount * input.batchCount };
   });
 }
 
@@ -140,7 +242,7 @@ export async function requestAllocation(actor: Actor, batchId: string, quantity:
         requestReason: reason.trim() || null,
       })
       .returning();
-    await tx.update(schema.batches).set({ status: "allocation_pending" }).where(eq(schema.batches.id, batch.id));
+    await tx.update(schema.batches).set({ status: "allocation_pending", lastModifiedBy: actor.userId, updatedAt: new Date() }).where(eq(schema.batches.id, batch.id));
     await appendAudit(tx, {
       manufacturerId: batch.manufacturerId,
       actorType: "user",
@@ -156,7 +258,8 @@ export async function requestAllocation(actor: Actor, batchId: string, quantity:
 }
 
 export async function decideAllocation(actor: Actor, requestId: string, approve: boolean, reason: string) {
-  return getDb().transaction(async (tx) => {
+  const db = getDb();
+  const prepared = await db.transaction(async (tx) => {
     const [request] = await tx
       .select()
       .from(schema.approvalRequests)
@@ -176,16 +279,16 @@ export async function decideAllocation(actor: Actor, requestId: string, approve:
       type: "approval_request",
       id: request.id,
     });
-    if (request.status !== "pending") throw conflict("This request has already been decided.");
-    if (!approve && !reason.trim()) throw invalid("A reason is required to reject a request.");
-
-    await tx
-      .update(schema.approvalRequests)
-      .set({ status: approve ? "approved" : "rejected", decidedBy: actor.userId, decisionReason: reason.trim() || null, decidedAt: new Date() })
-      .where(eq(schema.approvalRequests.id, request.id));
+    if (request.status === "rejected") throw conflict("This request was rejected and cannot be reused.");
+    if (request.status === "approved" && !approve) throw conflict("An approved allocation cannot be changed to rejected.");
+    if (request.status === "pending" && !approve && !reason.trim()) throw invalid("A reason is required to reject a request.");
 
     if (!approve) {
-      await tx.update(schema.batches).set({ status: "draft" }).where(eq(schema.batches.id, batch.id));
+      await tx
+        .update(schema.approvalRequests)
+        .set({ status: "rejected", decidedBy: actor.userId, decisionReason: reason.trim(), decidedAt: new Date() })
+        .where(eq(schema.approvalRequests.id, request.id));
+      await tx.update(schema.batches).set({ status: "draft", lastModifiedBy: actor.userId, updatedAt: new Date() }).where(eq(schema.batches.id, batch.id));
       await appendAudit(tx, {
         manufacturerId: batch.manufacturerId,
         actorType: "user",
@@ -196,34 +299,88 @@ export async function decideAllocation(actor: Actor, requestId: string, approve:
         decision: "allow",
         detail: { approvalRequestId: request.id, reason },
       });
-      return { approved: false as const };
+      return { approved: false as const, batch, request, quantity: 0 };
     }
 
     const quantity = Number(request.payload.quantity);
-    const job = await issueUnits(tx, batch, request.id, quantity);
-    await tx.update(schema.batches).set({ status: "allocated" }).where(eq(schema.batches.id, batch.id));
-    await appendAudit(tx, {
-      manufacturerId: batch.manufacturerId,
-      actorType: "user",
-      actorId: actor.userId,
-      action: "identity.allocation.approve",
-      resourceType: "batch",
-      resourceId: batch.id,
-      decision: "allow",
-      detail: { approvalRequestId: request.id, quantity, printJobId: job.id, manifestHash: job.manifestHash.toString("hex"), keyVersion: job.keyVersion },
-    });
-    return { approved: true as const, printJobId: job.id };
+    if (request.status === "pending") {
+      await tx
+        .update(schema.approvalRequests)
+        .set({ status: "approved", decidedBy: actor.userId, decisionReason: reason.trim() || null, decidedAt: new Date() })
+        .where(eq(schema.approvalRequests.id, request.id));
+      await tx
+        .insert(schema.identityAllocations)
+        .values({
+          manufacturerId: batch.manufacturerId,
+          batchId: batch.id,
+          approvalRequestId: request.id,
+          idempotencyKey: request.id,
+          requestedQuantity: quantity,
+        })
+        .onConflictDoNothing({ target: schema.identityAllocations.approvalRequestId });
+    }
+    return { approved: true as const, batch, request, quantity };
   });
+  if (!prepared.approved) return { approved: false as const };
+
+  try {
+    return await db.transaction(async (tx) => {
+      const [allocation] = await tx
+        .select()
+        .from(schema.identityAllocations)
+        .where(eq(schema.identityAllocations.approvalRequestId, prepared.request.id))
+        .for("update");
+      if (!allocation) throw new Error("Approved allocation is missing its durable issuance record");
+      const [existingJob] = await tx.select().from(schema.printJobs).where(eq(schema.printJobs.approvalRequestId, prepared.request.id));
+      if (allocation.status === "completed") {
+        if (!existingJob || allocation.issuedCount !== prepared.quantity) throw new Error("Completed allocation has inconsistent persisted counts");
+        return { approved: true as const, printJobId: existingJob.id };
+      }
+      await tx
+        .update(schema.identityAllocations)
+        .set({ status: "issuing", attempts: sql`${schema.identityAllocations.attempts} + 1`, startedAt: new Date(), updatedAt: new Date(), lastError: null })
+        .where(eq(schema.identityAllocations.id, allocation.id));
+      const batch = await loadBatch(tx, actor, prepared.batch.id, true);
+      const job = existingJob ?? (await issueUnits(tx, batch, prepared.request.id, prepared.quantity));
+      const [issued] = await tx.select({ n: count() }).from(schema.units).where(eq(schema.units.printJobId, job.id));
+      const issuedCount = Number(issued.n);
+      if (issuedCount !== prepared.quantity) throw new Error(`Incomplete allocation: expected ${prepared.quantity}, persisted ${issuedCount}`);
+      await tx
+        .update(schema.identityAllocations)
+        .set({ status: "completed", issuedCount, completedAt: new Date(), updatedAt: new Date(), lastError: null })
+        .where(eq(schema.identityAllocations.id, allocation.id));
+      await tx.update(schema.batches).set({ status: "allocated", lastModifiedBy: actor.userId, updatedAt: new Date() }).where(eq(schema.batches.id, batch.id));
+      await appendAudit(tx, {
+        manufacturerId: batch.manufacturerId,
+        actorType: "user",
+        actorId: actor.userId,
+        action: "identity.allocation.approve",
+        resourceType: "batch",
+        resourceId: batch.id,
+        decision: "allow",
+        detail: { approvalRequestId: prepared.request.id, allocationId: allocation.id, quantity: prepared.quantity, issuedCount, printJobId: job.id, manifestHash: job.manifestHash.toString("hex"), keyVersion: job.keyVersion, credentialProtocol: "CUIS" },
+      });
+      return { approved: true as const, printJobId: job.id };
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message.slice(0, 500) : "Unknown issuance failure";
+    await db
+      .update(schema.identityAllocations)
+      .set({ status: "failed", lastError: message, updatedAt: new Date() })
+      .where(eq(schema.identityAllocations.approvalRequestId, prepared.request.id));
+    throw error;
+  }
 }
 
 /**
- * Atomic issuance: CSPRNG identities, Ed25519 credentials and numeric references, reserved in
- * bounded chunks. Collisions on the global unique indexes are retried with fresh randomness.
+ * Atomic issuance: CSPRNG identities, authoritative CUIS v1 credentials, legacy Ed25519
+ * compatibility credentials and numeric references, reserved in bounded chunks. Collisions on
+ * the global unique indexes are retried with fresh randomness.
  */
 async function issueUnits(tx: Tx, batch: typeof schema.batches.$inferSelect, approvalRequestId: string, quantity: number) {
   const [[issuer], [product]] = await Promise.all([
-    tx.select({ shortId: schema.manufacturers.shortId }).from(schema.manufacturers).where(eq(schema.manufacturers.id, batch.manufacturerId)),
-    tx.select({ shortId: schema.products.shortId }).from(schema.products).where(eq(schema.products.id, batch.productId)),
+    tx.select({ shortId: schema.manufacturers.shortId, alias: schema.manufacturers.alias }).from(schema.manufacturers).where(eq(schema.manufacturers.id, batch.manufacturerId)),
+    tx.select({ shortId: schema.products.shortId, alias: schema.products.alias }).from(schema.products).where(eq(schema.products.id, batch.productId)),
   ]);
   const keyVersion = kms.activeSigningKeyVersion();
   const [job] = await tx
@@ -239,6 +396,30 @@ async function issueUnits(tx: Tx, batch: typeof schema.batches.$inferSelect, app
     })
     .returning();
 
+  const cartonIssuance = batch.cartonCount && batch.unitsPerCarton
+    ? Array.from({ length: batch.cartonCount }, (_, i) => {
+            const cartonIndex = i + 1;
+            const randomIdentity = randomBytes(16);
+            const code = `${issuer.alias}-${product.alias}-B${batch.shortId.toString(36).toUpperCase()}-C${String(cartonIndex).padStart(3, "0")}`;
+            const body = `${batch.id}:${cartonIndex}:${randomIdentity.toString("base64url")}`;
+            const credential = `CT1.${randomIdentity.toString("base64url")}.${kms.mac("carton-credential", body).subarray(0, 16).toString("base64url")}`;
+            const cuis = issueCuisCredential({ type: "carton", manufacturerId: batch.manufacturerId, productId: batch.productId, batchId: batch.id, randomIdentity });
+            return {
+              row: { manufacturerId: batch.manufacturerId, productId: batch.productId, batchId: batch.id, cartonIndex, code, randomIdentity, credential, cuisVersion: cuis.version, cuisKeyVersion: cuis.keyVersion, cuisAuthTag: cuis.authTag, cuisCredential: cuis.payload, expectedUnits: batch.unitsPerCarton! },
+              cuis,
+            };
+          })
+    : [];
+  const cartonRows = cartonIssuance.length
+    ? await tx.insert(schema.cartons).values(cartonIssuance.map((entry) => entry.row)).returning({ id: schema.cartons.id, cartonIndex: schema.cartons.cartonIndex })
+    : [];
+  const cartonCredentialByIndex = new Map(cartonIssuance.map((entry) => [entry.row.cartonIndex, entry.cuis]));
+  await registerCuisCredentials(
+    tx,
+    cartonRows.map((carton) => ({ type: "carton", subjectId: carton.id, credential: cartonCredentialByIndex.get(carton.cartonIndex)!, createdBy: batch.createdBy })),
+  );
+  const cartonByIndex = new Map(cartonRows.map((c) => [c.cartonIndex, c.id]));
+
   const manifest: { labelIndex: number; random: Buffer; digest: Buffer }[] = [];
   for (let start = 1; start <= quantity; start += ISSUANCE_CHUNK) {
     const end = Math.min(quantity, start + ISSUANCE_CHUNK - 1);
@@ -252,6 +433,7 @@ async function issueUnits(tx: Tx, batch: typeof schema.batches.$inferSelect, app
         productId: batch.productId,
         batchId: batch.id,
         printJobId: job.id,
+        cartonId: batch.unitsPerCarton && batch.cartonCount && labelIndex <= batch.unitsPerCarton * batch.cartonCount ? cartonByIndex.get(Math.ceil(labelIndex / batch.unitsPerCarton)) : undefined,
         labelIndex,
       }));
       const inserted = await tx
@@ -263,12 +445,23 @@ async function issueUnits(tx: Tx, batch: typeof schema.batches.$inferSelect, app
       pending = pending.filter((i) => !units.has(i));
     }
 
-    await tx.insert(schema.credentials).values(
-      [...units.values()].map((u) => ({
-        unitId: u.id,
-        formatVersion: CREDENTIAL_FORMAT_VERSION,
-        ...signClaims({ issuerShortId: issuer.shortId, productShortId: product.shortId, batchShortId: batch.shortId, unitRandom: u.random }),
-      })),
+    const issuedUnitCredentials = [...units.values()].map((u) => {
+        const legacy = signClaims({ issuerShortId: issuer.shortId, productShortId: product.shortId, batchShortId: batch.shortId, unitRandom: u.random });
+        const cuis = issueCuisCredential({ type: "unit", manufacturerId: batch.manufacturerId, productId: batch.productId, batchId: batch.id, randomIdentity: u.random });
+        return { unitId: u.id, cuis, row: {
+          unitId: u.id,
+          formatVersion: CREDENTIAL_FORMAT_VERSION,
+          ...legacy,
+          cuisVersion: cuis.version,
+          cuisKeyVersion: cuis.keyVersion,
+          cuisAuthTag: cuis.authTag,
+          cuisPayload: cuis.payload,
+        } };
+      });
+    await tx.insert(schema.credentials).values(issuedUnitCredentials.map((entry) => entry.row));
+    await registerCuisCredentials(
+      tx,
+      issuedUnitCredentials.map((entry) => ({ type: "unit", subjectId: entry.unitId, credential: entry.cuis, createdBy: batch.createdBy })),
     );
 
     let codePending = [...units.entries()];
@@ -342,7 +535,7 @@ function assertLease(actor: Actor, job: typeof schema.printJobs.$inferSelect) {
   }
 }
 
-export type Label = { unitId: string; labelIndex: number; payload: string; code: string; state: string };
+export type Label = { unitId: string; labelIndex: number; payload: string; code: string; state: string; cartonCode: string | null };
 
 /** Decrypts print data for the lease holder only. Every retrieval is audited. */
 export async function getPrintLabels(actor: Actor, jobId: string, opts: { offset?: number; limit?: number } = {}) {
@@ -364,11 +557,14 @@ export async function getPrintLabels(actor: Actor, jobId: string, opts: { offset
         keyVersion: schema.credentials.keyVersion,
         formatVersion: schema.credentials.formatVersion,
         signature: schema.credentials.signature,
+        cuisPayload: schema.credentials.cuisPayload,
         codeCiphertext: schema.manualCodes.codeCiphertext,
+        cartonCode: schema.cartons.code,
       })
       .from(schema.units)
       .innerJoin(schema.credentials, eq(schema.credentials.unitId, schema.units.id))
       .innerJoin(schema.manualCodes, eq(schema.manualCodes.unitId, schema.units.id))
+      .leftJoin(schema.cartons, eq(schema.cartons.id, schema.units.cartonId))
       .where(eq(schema.units.printJobId, job.id))
       .orderBy(asc(schema.units.labelIndex))
       .offset(opts.offset ?? 0)
@@ -388,7 +584,8 @@ export async function getPrintLabels(actor: Actor, jobId: string, opts: { offset
       labelIndex: r.labelIndex,
       state: r.state,
       code: kms.decrypt("manual-code", r.codeCiphertext, r.unitId),
-      payload: buildPayload(
+      cartonCode: r.cartonCode,
+      payload: r.cuisPayload ?? buildPayload(
         {
           formatVersion: r.formatVersion,
           keyVersion: r.keyVersion,
@@ -534,7 +731,7 @@ export async function runLineSimulation(actor: Actor, jobId: string, runId: stri
 
   const events: ProductionEventInput[] = toPrint.map((label, i) => {
     const readable = !smudged.has(i);
-    const credentialOk = readable && decodeAndVerify(label.payload).ok;
+    const credentialOk = readable && (looksLikeCuisCredential(label.payload) ? decodeAndVerifyCuis(label.payload, "unit").ok : decodeAndVerify(label.payload).ok);
     const codeOk = readable && checkCode(label.code).ok;
     const eventId = uuidFrom(runId, label.unitId);
     if (!readable) return { eventId, unitId: label.unitId, type: "rejected", reason: "Camera: unreadable print (smudged QR)" };
@@ -692,7 +889,9 @@ export async function reconcileBatch(actor: Actor, batchId: string, physicalCoun
       .update(schema.units)
       .set({ state: "QA_PENDING", stateChangedAt: new Date() })
       .where(and(eq(schema.units.batchId, batch.id), eq(schema.units.state, "PRINTED_PENDING")));
-    await tx.update(schema.batches).set({ status: "reconciled" }).where(eq(schema.batches.id, batch.id));
+    const reconciledAt = new Date();
+    await tx.update(schema.cartons).set({ status: "printed", printedAt: reconciledAt, reconciledAt }).where(eq(schema.cartons.batchId, batch.id));
+    await tx.update(schema.batches).set({ status: "reconciled", lastModifiedBy: actor.userId, updatedAt: reconciledAt }).where(eq(schema.batches.id, batch.id));
     await appendAudit(tx, {
       manufacturerId: batch.manufacturerId,
       actorType: "user",
@@ -743,8 +942,9 @@ export async function releaseBatch(actor: Actor, batchId: string, samplesInspect
       .returning({ id: schema.units.id });
     await tx
       .update(schema.batches)
-      .set({ status: "released", releasedBy: actor.userId, releasedAt: now, releaseNote: note.trim() })
+      .set({ status: "released", releasedBy: actor.userId, releasedAt: now, releaseNote: note.trim(), lastModifiedBy: actor.userId, updatedAt: now })
       .where(eq(schema.batches.id, batch.id));
+    await tx.update(schema.cartons).set({ status: "released" }).where(eq(schema.cartons.batchId, batch.id));
     await appendAudit(tx, {
       manufacturerId: batch.manufacturerId,
       actorType: "user",

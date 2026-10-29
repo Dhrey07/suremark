@@ -1,12 +1,12 @@
-import { desc, eq } from "drizzle-orm";
+import { count, desc, eq, ne } from "drizzle-orm";
 import { ActionForm, SubmitButton } from "@/components/action-form";
-import { Badge, Card, CardHeader, EmptyState, Notice, PageHeader, Table, Td } from "@/components/ui";
+import { Badge, Card, CardHeader, EmptyState, Notice, PageHeader, Stat, Table, Td } from "@/components/ui";
 import { getDb, schema } from "@/db";
 import { formatDate } from "@/lib/dates";
 import { env } from "@/lib/env";
 import { stateName } from "@/lib/geo";
 import { requireActor } from "@/lib/session";
-import { resetDemoAction, reviewManufacturerAction, reviewProductAction } from "./actions";
+import { governManufacturerAction, resetDemoAction, reviewManufacturerAction, reviewProductAction } from "./actions";
 
 function Decide({ action, field, id, approveLabel }: { action: typeof reviewManufacturerAction; field: string; id: string; approveLabel: string }) {
   return (
@@ -23,25 +23,45 @@ function Decide({ action, field, id, approveLabel }: { action: typeof reviewManu
 }
 
 export default async function PlatformPage() {
-  await requireActor();
+  const actor = await requireActor("/platform/login");
   const db = getDb();
-  const [manufacturers, pendingProducts] = await Promise.all([
+  const [manufacturers, pendingProducts, manufacturerStats, productStats, unitStats, verificationStats, riskStats, recallStats] = await Promise.all([
     db.select().from(schema.manufacturers).orderBy(desc(schema.manufacturers.createdAt)),
     db
       .select({ p: schema.products, m: schema.manufacturers.legalName })
       .from(schema.products)
       .innerJoin(schema.manufacturers, eq(schema.manufacturers.id, schema.products.manufacturerId))
       .where(eq(schema.products.status, "pending")),
+    db.select({ status: schema.manufacturers.kybStatus, n: count() }).from(schema.manufacturers).groupBy(schema.manufacturers.kybStatus),
+    db.select({ n: count() }).from(schema.products),
+    db.select({ state: schema.units.state, n: count() }).from(schema.units).groupBy(schema.units.state),
+    db.select({ n: count() }).from(schema.verificationEvents),
+    db.select({ n: count() }).from(schema.riskCases).where(ne(schema.riskCases.status, "closed")),
+    db.select({ n: count() }).from(schema.recalls).where(eq(schema.recalls.status, "active")),
   ]);
+  const manufacturerCounts = Object.fromEntries(manufacturerStats.map((row) => [row.status, Number(row.n)]));
+  const unitCounts = Object.fromEntries(unitStats.map((row) => [row.state, Number(row.n)]));
+  const totalManufacturers = Object.values(manufacturerCounts).reduce((sum, value) => sum + value, 0);
+  const totalUnits = Object.values(unitCounts).reduce((sum, value) => sum + value, 0);
   return (
     <>
       <PageHeader
-        title="Onboarding & reviews"
-        description="The platform verifies each manufacturer (KYB) and each product claim before any identity can be issued. Reviewers cannot alter issued history."
+        eyebrow="Trust network"
+        title={`Good morning, ${actor.name.split(" ")[0]}.`}
+        description="Review organizations, watch identity activity and act on trust signals across the network."
       />
       <div className="space-y-6">
+        <div className="grid gap-4 lg:grid-cols-[1.15fr_1fr_1fr]">
+          <div className="rounded-2xl bg-[#10261e] p-6 text-white shadow-sm">
+            <div className="text-sm text-white/60">Product identities protected</div>
+            <div className="tabular mt-3 text-4xl font-semibold tracking-[-0.05em]">{totalUnits.toLocaleString()}</div>
+            <div className="mt-5 flex gap-5 border-t border-white/10 pt-4 text-sm"><span><b className="text-[#b8f06a]">{(unitCounts.ACTIVE ?? 0).toLocaleString()}</b> released</span><span><b>{Number(verificationStats[0]?.n ?? 0).toLocaleString()}</b> checks</span></div>
+          </div>
+          <Stat label="Organizations in the network" value={totalManufacturers.toLocaleString()} hint={`${manufacturerCounts.approved ?? 0} approved · ${manufacturerCounts.pending ?? 0} awaiting review`} />
+          <Stat label="Attention required" value={Number(riskStats[0]?.n ?? 0).toLocaleString()} hint={`${Number(recallStats[0]?.n ?? 0)} active recalls · ${Number(productStats[0]?.n ?? 0)} registered products`} />
+        </div>
         <Card>
-          <CardHeader title="Manufacturers" description="Know-your-business review: legal identity, CAC registration, authorised representatives." />
+          <CardHeader title="Manufacturer network" description="Review onboarding, monitor standing and manage access to the identity network." />
           <Table head={["Organisation", "RC number", "Sector", "HQ", "Applied", "Status", ""]}>
             {manufacturers.map((m) => (
               <tr key={m.id}>
@@ -54,9 +74,16 @@ export default async function PlatformPage() {
                 <Td>{stateName(m.hqState)}</Td>
                 <Td className="whitespace-nowrap">{formatDate(m.createdAt)}</Td>
                 <Td>
-                  <Badge tone={m.kybStatus === "approved" ? "green" : m.kybStatus === "pending" ? "amber" : "red"}>{m.kybStatus}</Badge>
+                  <div className="flex flex-wrap gap-1"><Badge tone={m.kybStatus === "approved" ? "green" : m.kybStatus === "pending" ? "amber" : "red"}>{m.kybStatus}</Badge>
+                  {m.kybStatus === "approved" && <Badge tone={m.operationalStatus === "active" ? "green" : "red"}>{m.operationalStatus}</Badge>}</div>
                 </Td>
-                <Td>{m.kybStatus === "pending" && <Decide action={reviewManufacturerAction} field="manufacturerId" id={m.id} approveLabel="Approve" />}</Td>
+                <Td>{m.kybStatus === "pending" ? <Decide action={reviewManufacturerAction} field="manufacturerId" id={m.id} approveLabel="Approve" /> : m.kybStatus === "approved" ? (
+                  <ActionForm action={governManufacturerAction} className="flex min-w-64 flex-wrap gap-2">
+                    <input type="hidden" name="manufacturerId" value={m.id} />
+                    <input name="reason" required minLength={10} aria-label="Governance reason" placeholder="Reason (minimum 10 characters)" className="min-w-48 flex-1 rounded-lg px-3 py-1.5 text-sm ring-1 ring-slate-300" />
+                    <button name="operation" value={m.operationalStatus === "active" ? "suspend" : "reactivate"} className={m.operationalStatus === "active" ? "rounded-lg bg-red-600 px-3 py-1.5 text-sm font-medium text-white" : "rounded-lg bg-brand-700 px-3 py-1.5 text-sm font-medium text-white"}>{m.operationalStatus === "active" ? "Suspend" : "Reactivate"}</button>
+                  </ActionForm>
+                ) : null}</Td>
               </tr>
             ))}
           </Table>

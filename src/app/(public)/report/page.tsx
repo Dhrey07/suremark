@@ -8,13 +8,13 @@ export const metadata: Metadata = { title: "Report a suspected fake" };
 
 export default function ReportPage() {
   return (
-    <div className="mx-auto max-w-xl px-4 py-10">
-      <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Report a suspected fake</h1>
-      <p className="mt-2 text-sm text-slate-600">
-        Your report goes to the manufacturer&apos;s compliance team and appears in the regulator&apos;s surveillance view. We do not ask for your name
-        or phone number.
+    <div className="mx-auto max-w-2xl px-4 py-12 sm:px-6 sm:py-16">
+      <p className="text-sm font-semibold text-brand-700">Safe, private reporting</p>
+      <h1 className="mt-2 text-4xl font-semibold tracking-[-0.05em] text-slate-950">Something doesn&apos;t look right?</h1>
+      <p className="mt-3 max-w-xl text-sm leading-6 text-slate-600">
+        Tell the product&apos;s compliance team what you noticed. You do not need to share your name or phone number.
       </p>
-      <ActionForm action={reportAction} resetOnSuccess className="mt-6 space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <ActionForm action={reportAction} resetOnSuccess className="mt-8 space-y-5 rounded-2xl border border-[#e6e2d8] bg-white p-5 shadow-[0_16px_50px_rgba(25,45,35,0.08)] sm:p-7">
         <Field label="16-digit code (if the pack has one)">
           <input name="code" inputMode="numeric" autoComplete="off" className={`${inputClass} font-mono`} placeholder="0000 0000 0000 0000" />
         </Field>
@@ -31,7 +31,7 @@ export default function ReportPage() {
         <Field label="What looked wrong?">
           <textarea name="description" required minLength={5} maxLength={1000} rows={4} className={inputClass} placeholder="e.g. seal broken, spelling errors, tablets a different colour" />
         </Field>
-        <SubmitButton pendingText="Sending…">Send report</SubmitButton>
+        <SubmitButton className="w-full sm:w-auto" pendingText="Sending securely…">Send report securely</SubmitButton>
       </ActionForm>
     </div>
   );

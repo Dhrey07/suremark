@@ -32,14 +32,17 @@ export default async function Overview() {
     <>
       <PageHeader
         eyebrow={m.manufacturerName}
-        title={`Welcome, ${actor.name.split(" ")[0]}`}
-        description={`You are signed in as ${m.roles.map((r) => ROLES[r]?.label ?? r).join(", ")}. You only see and act on what your role and assigned sites allow.`}
+        title={`Here’s what needs attention, ${actor.name.split(" ")[0]}.`}
+        description={`${m.roles.map((r) => ROLES[r]?.label ?? r).join(", ")} · Your workspace is tailored to your role and assigned sites.`}
       />
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat label="Active units in market" value={(overview.units.ACTIVE ?? 0).toLocaleString()} />
-        <Stat label="Consumer checks · 30 days" value={checks.toLocaleString()} />
-        <Stat label="Alerting checks · 30 days" value={alerts.toLocaleString()} hint="Suspicious or unreleased" />
-        <Stat label="Open risk cases" value={overview.openRisk.toLocaleString()} />
+      <div className="grid gap-4 md:grid-cols-[1.2fr_1fr_1fr]">
+        <div className="rounded-2xl bg-[#10261e] p-6 text-white shadow-sm">
+          <div className="text-sm text-white/60">Products protected in market</div>
+          <div className="tabular mt-3 text-4xl font-semibold tracking-[-0.05em]">{(overview.units.ACTIVE ?? 0).toLocaleString()}</div>
+          <div className="mt-5 border-t border-white/10 pt-4 text-sm text-white/70"><span className="font-semibold text-[#b8f06a]">{checks.toLocaleString()}</span> consumer checks in 30 days</div>
+        </div>
+        <Stat label="Checks needing attention" value={alerts.toLocaleString()} hint="Suspicious or checked before release" />
+        <Stat label="Open security cases" value={overview.openRisk.toLocaleString()} hint={overview.openRisk ? "Review and assign next steps" : "No unresolved cases"} />
       </div>
       <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_1.4fr]">
         <Card>

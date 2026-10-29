@@ -29,6 +29,7 @@ const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull(
 
 export const userDomain = pgEnum("user_domain", ["platform", "regulator", "manufacturer"]);
 export const reviewStatus = pgEnum("review_status", ["pending", "approved", "rejected"]);
+export const manufacturerOperationalStatus = pgEnum("manufacturer_operational_status", ["active", "suspended"]);
 export const batchStatus = pgEnum("batch_status", [
   "draft",
   "allocation_pending",
@@ -62,6 +63,54 @@ export const verificationOutcome = pgEnum("verification_outcome", [
 export const riskKind = pgEnum("risk_kind", ["possible_clone", "unreleased_code_scanned", "consumer_report"]);
 export const riskSeverity = pgEnum("risk_severity", ["low", "medium", "high"]);
 export const riskStatus = pgEnum("risk_status", ["open", "investigating", "closed"]);
+export const regulatoryValidationStatus = pgEnum("regulatory_validation_status", [
+  "not_submitted",
+  "pending_verification",
+  "authoritative_verified",
+  "simulated_match",
+  "mismatch",
+  "verification_unavailable",
+  "rejected",
+  "expired_inactive",
+]);
+export const cartonStatus = pgEnum("carton_status", ["reserved", "printed", "released", "voided", "recalled"]);
+export const exportJobStatus = pgEnum("export_job_status", ["queued", "completed", "failed", "expired"]);
+export const exportJobType = pgEnum("export_job_type", ["csv", "unit_labels_pdf", "carton_labels_pdf", "batch_summary_pdf"]);
+export const signingKeyStatus = pgEnum("signing_key_status", ["active", "verify_only", "revoked"]);
+export const allocationStatus = pgEnum("allocation_status", ["queued", "issuing", "completed", "failed"]);
+export const credentialType = pgEnum("credential_type", ["batch", "carton", "unit"]);
+export const authenticationAlgorithm = pgEnum("authentication_algorithm", ["hmac_sha256", "ed25519"]);
+export const credentialIssuanceStatus = pgEnum("credential_issuance_status", ["issued", "revoked"]);
+export const signingKeyPurpose = pgEnum("signing_key_purpose", ["batch", "carton", "unit"]);
+export const registryKeyStatus = pgEnum("registry_key_status", ["pending", "active", "retired", "revoked"]);
+export const cryptographicResult = pgEnum("cryptographic_result", [
+  "valid",
+  "invalid",
+  "malformed",
+  "unsupported_version",
+  "unknown_key",
+  "key_revoked",
+  "unavailable",
+]);
+export const registrationResult = pgEnum("registration_result", ["registered", "not_registered", "mismatch", "not_checked", "unavailable"]);
+export const lifecycleResult = pgEnum("lifecycle_result", ["released", "not_released", "rejected", "quarantined", "recalled", "expired", "not_checked", "unavailable"]);
+export const verificationVerdict = pgEnum("verification_verdict", [
+  "verified_released",
+  "crypto_invalid",
+  "malformed_credential",
+  "unsupported_version",
+  "unknown_key",
+  "key_revoked",
+  "identity_not_registered",
+  "identity_mismatch",
+  "unit_not_released",
+  "unit_rejected",
+  "unit_quarantined",
+  "unit_recalled",
+  "unit_expired",
+  "suspicious_activity",
+  "verification_unavailable",
+]);
 
 // ---------- Identity & tenancy ----------
 
@@ -86,6 +135,19 @@ export const sessions = pgTable("sessions", {
   revokedAt: timestamp("revoked_at", { withTimezone: true }),
 });
 
+export const passwordResetTokens = pgTable(
+  "password_reset_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").notNull().references(() => users.id),
+    tokenHash: bytea("token_hash").notNull().unique(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("password_reset_user_time").on(t.userId, t.createdAt)],
+);
+
 export const manufacturers = pgTable(
   "manufacturers",
   {
@@ -93,15 +155,33 @@ export const manufacturers = pgTable(
     shortId: integer("short_id").generatedAlwaysAsIdentity().notNull().unique(),
     legalName: text("legal_name").notNull(),
     alias: varchar("alias", { length: 6 }).notNull().unique(),
+    prefixAssignedAt: timestamp("prefix_assigned_at", { withTimezone: true }).notNull().defaultNow(),
     rcNumber: text("rc_number").notNull(),
     sector: text("sector").notNull(),
     hqState: varchar("hq_state", { length: 2 }).notNull(),
     kybStatus: reviewStatus("kyb_status").notNull().default("pending"),
+    operationalStatus: manufacturerOperationalStatus("operational_status").notNull().default("active"),
+    statusReason: text("status_reason"),
+    statusChangedBy: uuid("status_changed_by").references(() => users.id),
+    statusChangedAt: timestamp("status_changed_at", { withTimezone: true }),
     kybReviewedBy: uuid("kyb_reviewed_by").references(() => users.id),
     kybReviewedAt: timestamp("kyb_reviewed_at", { withTimezone: true }),
     createdAt: createdAt(),
   },
   (t) => [check("alias_format", sql`${t.alias} ~ '^[A-Z]{2,6}$'`)],
+);
+
+export const manufacturerReviewEvents = pgTable(
+  "manufacturer_review_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    manufacturerId: uuid("manufacturer_id").notNull().references(() => manufacturers.id),
+    actorId: uuid("actor_id").notNull().references(() => users.id),
+    action: varchar("action", { length: 40 }).notNull(),
+    note: text("note"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("manufacturer_review_history").on(t.manufacturerId, t.createdAt)],
 );
 
 export const organizationMemberships = pgTable(
@@ -180,19 +260,55 @@ export const productionLines = pgTable(
   ],
 );
 
+export const productFamilies = pgTable(
+  "product_families",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    manufacturerId: uuid("manufacturer_id").notNull().references(() => manufacturers.id),
+    name: text("name").notNull(),
+    brand: text("brand").notNull(),
+    code: varchar("code", { length: 4 }).notNull(),
+    description: text("description"),
+    createdBy: uuid("created_by").references(() => users.id),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("product_family_name").on(t.manufacturerId, t.name),
+    uniqueIndex("product_family_code").on(t.manufacturerId, t.code),
+    unique("product_family_tenant").on(t.id, t.manufacturerId),
+    check("product_family_code_format", sql`${t.code} ~ '^[A-Z]{2,4}$'`),
+  ],
+);
+
 export const products = pgTable(
   "products",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     shortId: integer("short_id").generatedAlwaysAsIdentity().notNull().unique(),
     manufacturerId: uuid("manufacturer_id").notNull().references(() => manufacturers.id),
+    familyId: uuid("family_id").references(() => productFamilies.id),
     alias: varchar("alias", { length: 8 }).notNull(),
     name: text("name").notNull(),
+    brand: text("brand").notNull().default("Unbranded"),
+    variant: text("variant").notNull().default(""),
+    category: text("category").notNull().default("General"),
+    description: text("description").notNull().default(""),
+    imageUrl: text("image_url"),
     dosageForm: text("dosage_form").notNull(),
     strength: text("strength").notNull(),
     packSize: text("pack_size").notNull(),
+    packagingType: text("packaging_type").notNull().default("Unit"),
+    netQuantity: integer("net_quantity").notNull().default(1),
+    measurementUnit: varchar("measurement_unit", { length: 24 }).notNull().default("unit"),
+    manufacturingRequirements: text("manufacturing_requirements"),
+    shelfLifeDays: integer("shelf_life_days").notNull().default(730),
     gtin: varchar("gtin", { length: 14 }),
     nafdacRegNo: text("nafdac_reg_no"),
+    regulatoryStatus: regulatoryValidationStatus("regulatory_status").notNull().default("not_submitted"),
+    regulatorySource: text("regulatory_source"),
+    regulatoryVerifiedAt: timestamp("regulatory_verified_at", { withTimezone: true }),
+    regulatoryNote: text("regulatory_note"),
+    regulatorySimulated: boolean("regulatory_simulated").notNull().default(false),
     status: reviewStatus("status").notNull().default("pending"),
     reviewedBy: uuid("reviewed_by").references(() => users.id),
     reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
@@ -204,6 +320,30 @@ export const products = pgTable(
     unique("product_tenant").on(t.id, t.manufacturerId),
     check("product_alias_format", sql`${t.alias} ~ '^[A-Z0-9]{2,8}$'`),
     check("gtin_format", sql`${t.gtin} is null or ${t.gtin} ~ '^[0-9]{8,14}$'`),
+    check("product_net_quantity", sql`${t.netQuantity} > 0`),
+    check("product_shelf_life", sql`${t.shelfLifeDays} between 1 and 7300`),
+  ],
+);
+
+export const packagingVersions = pgTable(
+  "packaging_versions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    manufacturerId: uuid("manufacturer_id").notNull().references(() => manufacturers.id),
+    productId: uuid("product_id").notNull().references(() => products.id),
+    version: integer("version").notNull(),
+    unitType: text("unit_type").notNull(),
+    unitsPerCarton: integer("units_per_carton").notNull(),
+    cartonsPerPallet: integer("cartons_per_pallet"),
+    active: boolean("active").notNull().default(true),
+    createdBy: uuid("created_by").references(() => users.id),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("packaging_product_version").on(t.productId, t.version),
+    unique("packaging_tenant").on(t.id, t.manufacturerId),
+    check("packaging_units_per_carton", sql`${t.unitsPerCarton} between 1 and 10000`),
+    check("packaging_cartons_per_pallet", sql`${t.cartonsPerPallet} is null or ${t.cartonsPerPallet} between 1 and 10000`),
   ],
 );
 
@@ -219,11 +359,26 @@ export const batches = pgTable(
     factoryId: uuid("factory_id").notNull(),
     lineId: uuid("line_id").notNull(),
     lot: varchar("lot", { length: 32 }).notNull(),
+    cuisVersion: smallint("cuis_version"),
+    cuisKeyVersion: smallint("cuis_key_version"),
+    cuisRandomIdentity: bytea("cuis_random_identity"),
+    cuisAuthTag: bytea("cuis_auth_tag"),
+    cuisCredential: text("cuis_credential"),
     manufactureDate: date("manufacture_date").notNull(),
     expiryDate: date("expiry_date").notNull(),
     plannedQuantity: integer("planned_quantity").notNull(),
+    packagingVersionId: uuid("packaging_version_id").references(() => packagingVersions.id),
+    unitsPerCarton: integer("units_per_carton"),
+    cartonCount: integer("carton_count"),
+    looseUnits: integer("loose_units").notNull().default(0),
+    productionNotes: text("production_notes"),
+    batchGroupId: uuid("batch_group_id"),
     status: batchStatus("status").notNull().default("draft"),
     createdBy: uuid("created_by").notNull().references(() => users.id),
+    createdByName: text("created_by_name").notNull().default("Unknown user"),
+    createdByRole: text("created_by_role").notNull().default("Manufacturer user"),
+    lastModifiedBy: uuid("last_modified_by").references(() => users.id),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     releasedBy: uuid("released_by").references(() => users.id),
     releasedAt: timestamp("released_at", { withTimezone: true }),
     releaseNote: text("release_note"),
@@ -231,6 +386,8 @@ export const batches = pgTable(
   },
   (t) => [
     uniqueIndex("batch_lot").on(t.productId, t.lot),
+    uniqueIndex("batch_reference_tenant").on(t.manufacturerId, t.lot),
+    index("batch_product_created").on(t.productId, t.createdAt),
     unique("batch_tenant").on(t.id, t.manufacturerId),
     foreignKey({ columns: [t.productId, t.manufacturerId], foreignColumns: [products.id, products.manufacturerId] }),
     foreignKey({
@@ -239,6 +396,11 @@ export const batches = pgTable(
     }),
     check("batch_dates", sql`${t.expiryDate} > ${t.manufactureDate}`),
     check("batch_quantity", sql`${t.plannedQuantity} between 1 and 100000`),
+    uniqueIndex("batch_cuis_random_identity").on(t.cuisRandomIdentity),
+    uniqueIndex("batch_cuis_credential").on(t.cuisCredential),
+    check("batch_cuis_lengths", sql`(${t.cuisVersion} is null and ${t.cuisKeyVersion} is null and ${t.cuisRandomIdentity} is null and ${t.cuisAuthTag} is null and ${t.cuisCredential} is null) or (${t.cuisVersion} = 1 and ${t.cuisKeyVersion} > 0 and octet_length(${t.cuisRandomIdentity}) = 16 and octet_length(${t.cuisAuthTag}) = 16 and ${t.cuisCredential} is not null)`),
+    check("batch_loose_units", sql`${t.looseUnits} >= 0`),
+    check("batch_packaging_snapshot", sql`(${t.unitsPerCarton} is null and ${t.cartonCount} is null and ${t.looseUnits} = 0) or (${t.unitsPerCarton} > 0 and ${t.cartonCount} >= 0 and ${t.plannedQuantity} = (${t.unitsPerCarton} * ${t.cartonCount}) + ${t.looseUnits})`),
   ],
 );
 
@@ -265,6 +427,33 @@ export const approvalRequests = pgTable(
   ],
 );
 
+export const identityAllocations = pgTable(
+  "identity_allocations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    manufacturerId: uuid("manufacturer_id").notNull().references(() => manufacturers.id),
+    batchId: uuid("batch_id").notNull().references(() => batches.id),
+    approvalRequestId: uuid("approval_request_id").notNull().references(() => approvalRequests.id),
+    idempotencyKey: uuid("idempotency_key").notNull(),
+    requestedQuantity: integer("requested_quantity").notNull(),
+    issuedCount: integer("issued_count").notNull().default(0),
+    status: allocationStatus("status").notNull().default("queued"),
+    attempts: integer("attempts").notNull().default(0),
+    lastError: text("last_error"),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("identity_allocation_batch").on(t.batchId),
+    uniqueIndex("identity_allocation_approval").on(t.approvalRequestId),
+    uniqueIndex("identity_allocation_idempotency").on(t.idempotencyKey),
+    index("identity_allocation_status").on(t.status, t.updatedAt),
+    check("identity_allocation_quantity", sql`${t.requestedQuantity} > 0 and ${t.issuedCount} >= 0 and ${t.issuedCount} <= ${t.requestedQuantity}`),
+  ],
+);
+
 export const printJobs = pgTable(
   "print_jobs",
   {
@@ -288,6 +477,60 @@ export const printJobs = pgTable(
   ],
 );
 
+export const exportJobs = pgTable(
+  "export_jobs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    manufacturerId: uuid("manufacturer_id").notNull().references(() => manufacturers.id),
+    batchId: uuid("batch_id").notNull().references(() => batches.id),
+    requestedBy: uuid("requested_by").notNull().references(() => users.id),
+    type: exportJobType("type").notNull(),
+    status: exportJobStatus("status").notNull().default("queued"),
+    scope: jsonb("scope").$type<Record<string, unknown>>().notNull().default({}),
+    recordCount: integer("record_count"),
+    contentHash: varchar("content_hash", { length: 64 }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    errorMessage: text("error_message"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("export_jobs_batch_time").on(t.batchId, t.createdAt),
+    index("export_jobs_requester_time").on(t.requestedBy, t.createdAt),
+  ],
+);
+
+export const cartons = pgTable(
+  "cartons",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    manufacturerId: uuid("manufacturer_id").notNull().references(() => manufacturers.id),
+    productId: uuid("product_id").notNull().references(() => products.id),
+    batchId: uuid("batch_id").notNull().references(() => batches.id),
+    cartonIndex: integer("carton_index").notNull(),
+    code: varchar("code", { length: 48 }).notNull().unique(),
+    randomIdentity: bytea("random_identity").notNull().unique(),
+    credential: text("credential").notNull().unique(),
+    cuisVersion: smallint("cuis_version"),
+    cuisKeyVersion: smallint("cuis_key_version"),
+    cuisAuthTag: bytea("cuis_auth_tag"),
+    cuisCredential: text("cuis_credential"),
+    expectedUnits: integer("expected_units").notNull(),
+    status: cartonStatus("status").notNull().default("reserved"),
+    printedAt: timestamp("printed_at", { withTimezone: true }),
+    reconciledAt: timestamp("reconciled_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("carton_batch_position").on(t.batchId, t.cartonIndex),
+    index("carton_batch_status").on(t.batchId, t.status),
+    check("carton_expected_units", sql`${t.expectedUnits} > 0`),
+    check("carton_random_length", sql`octet_length(${t.randomIdentity}) = 16`),
+    uniqueIndex("carton_cuis_credential").on(t.cuisCredential),
+    check("carton_cuis_lengths", sql`(${t.cuisVersion} is null and ${t.cuisKeyVersion} is null and ${t.cuisAuthTag} is null and ${t.cuisCredential} is null) or (${t.cuisVersion} = 1 and ${t.cuisKeyVersion} > 0 and octet_length(${t.cuisAuthTag}) = 16 and ${t.cuisCredential} is not null)`),
+  ],
+);
+
 export const units = pgTable(
   "units",
   {
@@ -296,6 +539,7 @@ export const units = pgTable(
     manufacturerId: uuid("manufacturer_id").notNull(),
     productId: uuid("product_id").notNull(),
     batchId: uuid("batch_id").notNull(),
+    cartonId: uuid("carton_id").references(() => cartons.id),
     printJobId: uuid("print_job_id").notNull(),
     labelIndex: integer("label_index").notNull(),
     state: unitState("state").notNull().default("RESERVED"),
@@ -319,6 +563,101 @@ export const credentials = pgTable("credentials", {
   formatVersion: smallint("format_version").notNull(),
   keyVersion: smallint("key_version").notNull(),
   signature: bytea("signature").notNull(),
+  cuisVersion: smallint("cuis_version"),
+  cuisKeyVersion: smallint("cuis_key_version"),
+  cuisAuthTag: bytea("cuis_auth_tag"),
+  cuisPayload: text("cuis_payload").unique(),
+  createdAt: createdAt(),
+});
+
+/** Non-secret metadata only. Key material remains behind the KMS provider interface. */
+export const signingKeyMetadata = pgTable("signing_key_metadata", {
+  version: smallint("version").primaryKey(),
+  provider: varchar("provider", { length: 32 }).notNull(),
+  status: signingKeyStatus("status").notNull(),
+  activatedAt: timestamp("activated_at", { withTimezone: true }).notNull().defaultNow(),
+  verifyOnlyAt: timestamp("verify_only_at", { withTimezone: true }),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  revocationReason: text("revocation_reason"),
+});
+
+/** Versioned non-secret signing-key registry. Protected key material remains in the KMS provider. */
+export const signingKeys = pgTable(
+  "signing_keys",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    keyIdentifier: varchar("key_identifier", { length: 96 }).notNull().unique(),
+    algorithm: authenticationAlgorithm("algorithm").notNull(),
+    purpose: signingKeyPurpose("purpose").notNull(),
+    keyVersion: smallint("key_version").notNull(),
+    publicKey: bytea("public_key"),
+    protectedKeyReference: text("protected_key_reference").notNull(),
+    status: registryKeyStatus("status").notNull().default("pending"),
+    activatedAt: timestamp("activated_at", { withTimezone: true }),
+    retiredAt: timestamp("retired_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("signing_key_purpose_version").on(t.algorithm, t.purpose, t.keyVersion),
+    check("signing_key_version_positive", sql`${t.keyVersion} > 0`),
+    check("signing_key_material_policy", sql`(${t.algorithm} = 'hmac_sha256' and ${t.publicKey} is null) or (${t.algorithm} = 'ed25519' and octet_length(${t.publicKey}) = 32)`),
+  ],
+);
+
+/** Canonical credential registry. Subject typing is enforced by the three association tables below. */
+export const cryptographicCredentials = pgTable(
+  "cryptographic_credentials",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    credentialVersion: smallint("credential_version").notNull(),
+    credentialType: credentialType("credential_type").notNull(),
+    manufacturerId: uuid("manufacturer_id").notNull().references(() => manufacturers.id),
+    productId: uuid("product_variant_id").notNull(),
+    batchId: uuid("batch_id").references(() => batches.id),
+    randomIdentity: bytea("random_identity").notNull(),
+    canonicalPayload: bytea("canonical_payload").notNull(),
+    authenticationAlgorithm: authenticationAlgorithm("authentication_algorithm").notNull(),
+    authenticationProof: bytea("authentication_proof").notNull(),
+    signingKeyId: uuid("signing_key_id").notNull().references(() => signingKeys.id),
+    credentialFingerprint: bytea("credential_fingerprint").notNull().unique(),
+    issuanceStatus: credentialIssuanceStatus("issuance_status").notNull().default("issued"),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().defaultNow(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    revocationReason: text("revocation_reason"),
+    createdBy: uuid("created_by").references(() => users.id),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("crypto_credential_random_namespace").on(t.manufacturerId, t.credentialType, t.randomIdentity),
+    index("crypto_credential_subject_scope").on(t.manufacturerId, t.productId, t.batchId),
+    index("crypto_credential_signing_key").on(t.signingKeyId),
+    foreignKey({ columns: [t.productId, t.manufacturerId], foreignColumns: [products.id, products.manufacturerId] }),
+    check("crypto_credential_version", sql`${t.credentialVersion} > 0`),
+    check("crypto_random_length", sql`octet_length(${t.randomIdentity}) = 16`),
+    check("crypto_fingerprint_length", sql`octet_length(${t.credentialFingerprint}) = 32`),
+    check("crypto_proof_length", sql`(${t.authenticationAlgorithm} = 'hmac_sha256' and octet_length(${t.authenticationProof}) = 16) or (${t.authenticationAlgorithm} = 'ed25519' and octet_length(${t.authenticationProof}) = 64)`),
+    check("crypto_batch_binding", sql`(${t.credentialType} = 'batch' and ${t.batchId} is null) or (${t.credentialType} in ('carton','unit') and ${t.batchId} is not null)`),
+    check("crypto_revocation_state", sql`(${t.issuanceStatus} = 'issued' and ${t.revokedAt} is null) or (${t.issuanceStatus} = 'revoked' and ${t.revokedAt} is not null and ${t.revocationReason} is not null)`),
+  ],
+);
+
+export const batchCredentialSubjects = pgTable("batch_credential_subjects", {
+  credentialId: uuid("credential_id").primaryKey().references(() => cryptographicCredentials.id),
+  batchId: uuid("batch_id").notNull().unique().references(() => batches.id),
+  createdAt: createdAt(),
+});
+
+export const cartonCredentialSubjects = pgTable("carton_credential_subjects", {
+  credentialId: uuid("credential_id").primaryKey().references(() => cryptographicCredentials.id),
+  cartonId: uuid("carton_id").notNull().unique().references(() => cartons.id),
+  createdAt: createdAt(),
+});
+
+export const unitCredentialSubjects = pgTable("unit_credential_subjects", {
+  credentialId: uuid("credential_id").primaryKey().references(() => cryptographicCredentials.id),
+  unitId: uuid("unit_id").notNull().unique().references(() => units.id),
   createdAt: createdAt(),
 });
 
@@ -392,18 +731,32 @@ export const verificationEvents = pgTable(
   "verification_events",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    requestId: uuid("request_id").notNull().defaultRandom(),
     unitId: uuid("unit_id").references(() => units.id),
+    batchId: uuid("batch_id").references(() => batches.id),
     manufacturerId: uuid("manufacturer_id").references(() => manufacturers.id),
+    credentialType: credentialType("credential_type"),
+    credentialFingerprint: bytea("credential_fingerprint"),
+    protocolVersion: smallint("protocol_version"),
     channel: channel("channel").notNull(),
     outcome: verificationOutcome("outcome").notNull(),
+    cryptographicResult: cryptographicResult("cryptographic_result").notNull().default("unavailable"),
+    registrationResult: registrationResult("registration_result").notNull().default("not_checked"),
+    lifecycleResult: lifecycleResult("lifecycle_result").notNull().default("not_checked"),
+    finalVerdict: verificationVerdict("final_verdict").notNull().default("verification_unavailable"),
+    failureReasonCode: varchar("failure_reason_code", { length: 64 }),
+    riskScore: smallint("risk_score"),
     region: varchar("region", { length: 2 }),
     deviceHash: bytea("device_hash"),
     signals: jsonb("signals").$type<string[]>().notNull().default([]),
     createdAt: createdAt(),
   },
   (t) => [
+    uniqueIndex("verification_request_id").on(t.requestId),
     index("verification_unit_time").on(t.unitId, t.createdAt),
     index("verification_time").on(t.createdAt),
+    index("verification_fingerprint_time").on(t.credentialFingerprint, t.createdAt),
+    check("verification_risk_score", sql`${t.riskScore} is null or ${t.riskScore} between 0 and 100`),
   ],
 );
 
@@ -450,6 +803,22 @@ export const rateLimitBuckets = pgTable(
     count: integer("count").notNull().default(0),
   },
   (t) => [primaryKey({ columns: [t.key, t.windowStart] })],
+);
+
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").notNull().references(() => users.id),
+    manufacturerId: uuid("manufacturer_id").references(() => manufacturers.id),
+    kind: varchar("kind", { length: 48 }).notNull(),
+    title: text("title").notNull(),
+    body: text("body").notNull(),
+    href: text("href"),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("notifications_user_unread").on(t.userId, t.readAt, t.createdAt)],
 );
 
 // ---------- Audit ----------

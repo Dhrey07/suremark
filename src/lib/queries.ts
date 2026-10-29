@@ -1,10 +1,13 @@
 import "server-only";
-import { and, count, desc, eq, gte, inArray, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNull, ne, or, sql, type SQL } from "drizzle-orm";
 import { getDb, schema } from "@/db";
 import { can, memberPermissions, type Actor } from "./authz";
+import { buildPayload } from "./credential";
 import { notFound } from "./errors";
+import { kms } from "./kms";
 
 const s = schema;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /** SQL filter restricting batches to the actor's tenant and resource grants. */
 function batchScopeFilter(actor: Actor): SQL | undefined {
@@ -48,20 +51,22 @@ export async function listBatches(actor: Actor, opts: { status?: string; limit?:
 
 export async function getBatchDetail(actor: Actor, batchId: string) {
   const m = actor.membership;
-  if (!m || !/^[0-9a-f-]{36}$/.test(batchId)) throw notFound();
+  if (!m || !UUID_RE.test(batchId)) throw notFound();
   const db = getDb();
   const [row] = await db
-    .select({ batch: s.batches, product: s.products, line: s.productionLines, factory: s.factories })
+    .select({ batch: s.batches, product: s.products, line: s.productionLines, factory: s.factories, manufacturer: s.manufacturers })
     .from(s.batches)
     .innerJoin(s.products, eq(s.products.id, s.batches.productId))
     .innerJoin(s.productionLines, eq(s.productionLines.id, s.batches.lineId))
     .innerJoin(s.factories, eq(s.factories.id, s.batches.factoryId))
+    .innerJoin(s.manufacturers, eq(s.manufacturers.id, s.batches.manufacturerId))
     .where(and(eq(s.batches.id, batchId), eq(s.batches.manufacturerId, m.manufacturerId)));
   if (!row || !can(actor, "batch:view", row.batch)) throw notFound();
 
   const [job] = await db.select().from(s.printJobs).where(eq(s.printJobs.batchId, batchId));
-  const [counts, approvals, reconciliation, recalls, activity, users] = await Promise.all([
+  const [counts, cartons, approvals, reconciliation, recalls, activity, users, exports] = await Promise.all([
     db.select({ state: s.units.state, n: count() }).from(s.units).where(eq(s.units.batchId, batchId)).groupBy(s.units.state),
+    db.select().from(s.cartons).where(eq(s.cartons.batchId, batchId)).orderBy(s.cartons.cartonIndex),
     db
       .select()
       .from(s.approvalRequests)
@@ -80,7 +85,8 @@ export async function getBatchDetail(actor: Actor, batchId: string) {
       )
       .orderBy(desc(s.auditEvents.seq))
       .limit(50),
-    db.select({ id: s.users.id, name: s.users.name }).from(s.users),
+    db.select({ id: s.users.id, name: s.users.name, title: s.users.title }).from(s.users),
+    db.select().from(s.exportJobs).where(eq(s.exportJobs.batchId, batchId)).orderBy(desc(s.exportJobs.createdAt)).limit(20),
   ]);
   const printerIds = job
     ? (await db.selectDistinct({ id: s.productionEvents.actorId }).from(s.productionEvents).where(eq(s.productionEvents.printJobId, job.id))).map(
@@ -91,12 +97,15 @@ export async function getBatchDetail(actor: Actor, batchId: string) {
     ...row,
     job: job ?? null,
     counts: Object.fromEntries(counts.map((c) => [c.state, Number(c.n)])) as Record<string, number>,
+    cartons,
     approvals,
     reconciliation: reconciliation[0] ?? null,
     recalls,
     activity,
+    exports,
     printerIds,
     userName: Object.fromEntries(users.map((u) => [u.id, u.name])) as Record<string, string>,
+    userTitle: Object.fromEntries(users.map((u) => [u.id, u.title])) as Record<string, string | null>,
   };
 }
 
@@ -135,7 +144,7 @@ export async function operatorJobs(actor: Actor) {
 
 export async function getPrintJob(actor: Actor, jobId: string) {
   const m = actor.membership;
-  if (!m || !/^[0-9a-f-]{36}$/.test(jobId)) throw notFound();
+  if (!m || !UUID_RE.test(jobId)) throw notFound();
   const db = getDb();
   const [row] = await db
     .select({ job: s.printJobs, batch: s.batches, product: s.products, line: s.productionLines, manufacturer: s.manufacturers })
@@ -172,9 +181,9 @@ export async function getPrintJob(actor: Actor, jobId: string) {
 
 export async function tenantCatalog(actor: Actor) {
   const m = actor.membership;
-  if (!m) return { products: [], lines: [] };
+  if (!m) return { products: [], lines: [], packaging: [] };
   const db = getDb();
-  const [products, lines] = await Promise.all([
+  const [products, lines, packaging] = await Promise.all([
     db.select().from(s.products).where(eq(s.products.manufacturerId, m.manufacturerId)).orderBy(s.products.alias),
     db
       .select({ id: s.productionLines.id, name: s.productionLines.name, factoryId: s.factories.id, factoryName: s.factories.name, state: s.factories.state })
@@ -182,8 +191,169 @@ export async function tenantCatalog(actor: Actor) {
       .innerJoin(s.factories, eq(s.factories.id, s.productionLines.factoryId))
       .where(and(eq(s.productionLines.manufacturerId, m.manufacturerId), eq(s.productionLines.active, true)))
       .orderBy(s.factories.name, s.productionLines.name),
+    db
+      .select()
+      .from(s.packagingVersions)
+      .where(and(eq(s.packagingVersions.manufacturerId, m.manufacturerId), eq(s.packagingVersions.active, true)))
+      .orderBy(s.packagingVersions.productId, s.packagingVersions.version),
   ]);
-  return { products, lines };
+  return { products, lines, packaging };
+}
+
+export async function getProductDetail(actor: Actor, productId: string) {
+  const m = actor.membership;
+  if (!m || !UUID_RE.test(productId)) throw notFound();
+  const db = getDb();
+  const [row] = await db
+    .select({
+      product: s.products,
+      family: s.productFamilies,
+      manufacturer: s.manufacturers,
+      creatorName: s.users.name,
+      creatorTitle: s.users.title,
+    })
+    .from(s.products)
+    .innerJoin(s.manufacturers, eq(s.manufacturers.id, s.products.manufacturerId))
+    .leftJoin(s.productFamilies, eq(s.productFamilies.id, s.products.familyId))
+    .leftJoin(s.users, eq(s.users.id, s.products.createdBy))
+    .where(and(eq(s.products.id, productId), eq(s.products.manufacturerId, m.manufacturerId)));
+  if (!row) throw notFound();
+  const [packaging, batches, counts] = await Promise.all([
+    db.select().from(s.packagingVersions).where(eq(s.packagingVersions.productId, productId)).orderBy(desc(s.packagingVersions.version)),
+    db
+      .select({ batch: s.batches, factoryName: s.factories.name, lineName: s.productionLines.name, creatorName: s.users.name })
+      .from(s.batches)
+      .innerJoin(s.factories, eq(s.factories.id, s.batches.factoryId))
+      .innerJoin(s.productionLines, eq(s.productionLines.id, s.batches.lineId))
+      .leftJoin(s.users, eq(s.users.id, s.batches.createdBy))
+      .where(eq(s.batches.productId, productId))
+      .orderBy(desc(s.batches.createdAt)),
+    db.select({ batchId: s.units.batchId, n: count() }).from(s.units).where(eq(s.units.productId, productId)).groupBy(s.units.batchId),
+  ]);
+  return { ...row, packaging, batches, unitCounts: Object.fromEntries(counts.map((c) => [c.batchId, Number(c.n)])) as Record<string, number> };
+}
+
+export async function getBatchUnits(actor: Actor, batchId: string, opts: { cartonId?: string; loose?: boolean; page?: number; pageSize?: number } = {}) {
+  const detail = await getBatchDetail(actor, batchId);
+  if (opts.cartonId && !UUID_RE.test(opts.cartonId)) throw notFound();
+  const pageSize = Math.min(1000, Math.max(1, opts.pageSize ?? 24));
+  const page = Math.max(1, opts.page ?? 1);
+  const where = and(eq(s.units.batchId, batchId), opts.cartonId ? eq(s.units.cartonId, opts.cartonId) : opts.loose ? isNull(s.units.cartonId) : undefined);
+  const db = getDb();
+  const [totalRow, rows] = await Promise.all([
+    db.select({ n: count() }).from(s.units).where(where),
+    db
+      .select({
+        unit: s.units,
+        cartonCode: s.cartons.code,
+        formatVersion: s.credentials.formatVersion,
+        keyVersion: s.credentials.keyVersion,
+        signature: s.credentials.signature,
+        cuisVersion: s.credentials.cuisVersion,
+        cuisKeyVersion: s.credentials.cuisKeyVersion,
+        cuisPayload: s.credentials.cuisPayload,
+        codeCiphertext: s.manualCodes.codeCiphertext,
+        issuerShortId: s.manufacturers.shortId,
+        productShortId: s.products.shortId,
+      })
+      .from(s.units)
+      .innerJoin(s.credentials, eq(s.credentials.unitId, s.units.id))
+      .innerJoin(s.manualCodes, eq(s.manualCodes.unitId, s.units.id))
+      .innerJoin(s.manufacturers, eq(s.manufacturers.id, s.units.manufacturerId))
+      .innerJoin(s.products, eq(s.products.id, s.units.productId))
+      .leftJoin(s.cartons, eq(s.cartons.id, s.units.cartonId))
+      .where(where)
+      .orderBy(asc(s.units.labelIndex))
+      .offset((page - 1) * pageSize)
+      .limit(pageSize),
+  ]);
+  const showCodes = can(actor, "print_job:export", detail.batch);
+  return {
+    rows: rows.map((r) => ({
+      ...r.unit,
+      cartonCode: r.cartonCode,
+      code: showCodes ? kms.decrypt("manual-code", r.codeCiphertext, r.unit.id) : null,
+      payload: showCodes
+        ? r.cuisPayload ?? buildPayload({ formatVersion: r.formatVersion, keyVersion: r.keyVersion, issuerShortId: r.issuerShortId, productShortId: r.productShortId, batchShortId: detail.batch.shortId, unitRandom: r.unit.randomIdentity }, r.signature)
+        : null,
+      credentialVersion: r.cuisPayload ? `CUIS ${r.cuisVersion} · key ${r.cuisKeyVersion}` : `Legacy ${r.formatVersion}.${r.keyVersion}`,
+    })),
+    total: Number(totalRow[0]?.n ?? 0),
+    page,
+    pageSize,
+  };
+}
+
+export async function getUnitDetail(actor: Actor, unitId: string) {
+  const m = actor.membership;
+  if (!m || !UUID_RE.test(unitId)) throw notFound();
+  const db = getDb();
+  const [row] = await db
+    .select({
+      unit: s.units,
+      batch: s.batches,
+      product: s.products,
+      manufacturer: s.manufacturers,
+      carton: s.cartons,
+      formatVersion: s.credentials.formatVersion,
+      keyVersion: s.credentials.keyVersion,
+      signature: s.credentials.signature,
+      cuisVersion: s.credentials.cuisVersion,
+      cuisKeyVersion: s.credentials.cuisKeyVersion,
+      cuisPayload: s.credentials.cuisPayload,
+      codeCiphertext: s.manualCodes.codeCiphertext,
+    })
+    .from(s.units)
+    .innerJoin(s.batches, eq(s.batches.id, s.units.batchId))
+    .innerJoin(s.products, eq(s.products.id, s.units.productId))
+    .innerJoin(s.manufacturers, eq(s.manufacturers.id, s.units.manufacturerId))
+    .innerJoin(s.credentials, eq(s.credentials.unitId, s.units.id))
+    .innerJoin(s.manualCodes, eq(s.manualCodes.unitId, s.units.id))
+    .leftJoin(s.cartons, eq(s.cartons.id, s.units.cartonId))
+    .where(and(eq(s.units.id, unitId), eq(s.units.manufacturerId, m.manufacturerId)));
+  if (!row || !can(actor, "batch:view", row.batch)) throw notFound();
+  const verificationHistory = await db
+    .select({ channel: s.verificationEvents.channel, outcome: s.verificationEvents.outcome, region: s.verificationEvents.region, createdAt: s.verificationEvents.createdAt })
+    .from(s.verificationEvents)
+    .where(eq(s.verificationEvents.unitId, unitId))
+    .orderBy(desc(s.verificationEvents.createdAt))
+    .limit(50);
+  const showCodes = can(actor, "print_job:export", row.batch);
+  return {
+    ...row,
+    code: showCodes ? kms.decrypt("manual-code", row.codeCiphertext, row.unit.id) : null,
+    payload: showCodes
+      ? row.cuisPayload ?? buildPayload({ formatVersion: row.formatVersion, keyVersion: row.keyVersion, issuerShortId: row.manufacturer.shortId, productShortId: row.product.shortId, batchShortId: row.batch.shortId, unitRandom: row.unit.randomIdentity }, row.signature)
+      : null,
+    credentialVersion: row.cuisPayload ? `CUIS ${row.cuisVersion} · key ${row.cuisKeyVersion}` : `Legacy ${row.formatVersion}.${row.keyVersion}`,
+    verificationHistory,
+  };
+}
+
+export async function getBatchGroup(actor: Actor, groupId: string) {
+  const m = actor.membership;
+  if (!m || !UUID_RE.test(groupId)) throw notFound();
+  const rows = await getDb()
+    .select({ batch: s.batches, product: s.products, line: s.productionLines, factory: s.factories })
+    .from(s.batches)
+    .innerJoin(s.products, eq(s.products.id, s.batches.productId))
+    .innerJoin(s.productionLines, eq(s.productionLines.id, s.batches.lineId))
+    .innerJoin(s.factories, eq(s.factories.id, s.batches.factoryId))
+    .where(and(eq(s.batches.batchGroupId, groupId), eq(s.batches.manufacturerId, m.manufacturerId)))
+    .orderBy(s.batches.lot);
+  const visible = rows.filter((r) => can(actor, "batch:view", r.batch));
+  if (!visible.length) throw notFound();
+  const batchIds = visible.map((r) => r.batch.id);
+  const [unitCounts, cartonCounts] = await Promise.all([
+    getDb().select({ batchId: s.units.batchId, n: count() }).from(s.units).where(inArray(s.units.batchId, batchIds)).groupBy(s.units.batchId),
+    getDb().select({ batchId: s.cartons.batchId, n: count() }).from(s.cartons).where(inArray(s.cartons.batchId, batchIds)).groupBy(s.cartons.batchId),
+  ]);
+  return {
+    groupId,
+    rows,
+    unitCounts: Object.fromEntries(unitCounts.map((r) => [r.batchId, Number(r.n)])) as Record<string, number>,
+    cartonCounts: Object.fromEntries(cartonCounts.map((r) => [r.batchId, Number(r.n)])) as Record<string, number>,
+  };
 }
 
 export async function riskCases(actor: Actor, opts: { includeClosed?: boolean } = {}) {

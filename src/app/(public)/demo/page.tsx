@@ -133,7 +133,7 @@ export default async function DemoPacksPage() {
           expect="Unable to verify"
           tone="neutral"
           code={d.fakeCode}
-          how="Correct format and check digit, but never issued. The answer is deliberately generic so guessers learn nothing; repeated guesses are rate-limited."
+          how="Correct-looking format, but never issued. The answer is deliberately generic so guessers learn nothing; repeated guesses are rate-limited."
         />
         {d.forged && (
           <SampleCard
@@ -141,7 +141,7 @@ export default async function DemoPacksPage() {
             expect="Unable to verify"
             tone="neutral"
             url={`${base}/v/${d.forged}`}
-            how="A genuine QR with a few bits changed. The Ed25519 signature check fails before any database lookup, and the attempt counts in the regulator's forged-QR figure."
+            how="An altered QR is rejected securely and recorded for risk monitoring."
           />
         )}
         <SampleCard
@@ -149,7 +149,7 @@ export default async function DemoPacksPage() {
           expect="Check the code and try again"
           tone="neutral"
           code={d.genuine[0] ? d.genuine[0].code.slice(0, 15) + ((Number(d.genuine[0].code[15]) + 1) % 10) : null}
-          how="Genuine code pack 1 with its last digit changed. The check digit catches it instantly — no database lookup needed."
+          how="Genuine code pack 1 with its last digit changed. The altered value is rejected securely."
         />
       </div>
     </div>

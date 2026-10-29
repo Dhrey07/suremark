@@ -10,9 +10,10 @@ import { appendAudit } from "@/lib/audit";
 import { authorize } from "@/lib/authz";
 import { invalid, notFound } from "@/lib/errors";
 import { requireActor } from "@/lib/session";
-import { createProduct } from "@/lib/services/catalog";
+import { createProduct, updateProduct } from "@/lib/services/catalog";
 import {
   createBatch,
+  createBatchSet,
   decideAllocation,
   finishPrintJob,
   reconcileBatch,
@@ -31,7 +32,7 @@ export async function createBatchAction(_: ActionState, fd: FormData): Promise<A
     const batch = await createBatch(actor, {
       productId: str(fd, "productId"),
       lineId: str(fd, "lineId"),
-      lot: str(fd, "lot"),
+      lot: str(fd, "lot") || undefined,
       manufactureDate: str(fd, "manufactureDate"),
       expiryDate: str(fd, "expiryDate"),
       plannedQuantity: int(fd, "plannedQuantity"),
@@ -40,6 +41,56 @@ export async function createBatchAction(_: ActionState, fd: FormData): Promise<A
   });
   if (res.error) return res;
   redirect(`/app/batches/${id}`);
+}
+
+export async function createProductBatchAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const actor = await requireActor();
+  let id = "";
+  const res = await attempt(async () => {
+    if (str(fd, "confirm") !== "yes") throw invalid("Confirm the production quantities before creating identities.");
+    const productId = str(fd, "productId");
+    const packagingVersionId = str(fd, "packagingVersionId");
+    const cartonCount = int(fd, "cartonCount");
+    const looseUnits = int(fd, "looseUnits") || 0;
+    const batch = await createBatch(actor, {
+      productId,
+      packagingVersionId,
+      lineId: str(fd, "lineId"),
+      lot: str(fd, "lot") || undefined,
+      manufactureDate: str(fd, "manufactureDate"),
+      expiryDate: str(fd, "expiryDate"),
+      cartonCount,
+      looseUnits,
+      productionNotes: str(fd, "productionNotes"),
+    });
+    id = batch.id;
+  });
+  if (res.error) return res;
+  redirect(`/app/batches/${id}`);
+}
+
+export async function createBatchSetAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const actor = await requireActor();
+  let groupId = "";
+  const res = await attempt(async () => {
+    const [productId, packagingVersionId] = str(fd, "productPackaging").split("|");
+    if (!productId || !packagingVersionId) throw invalid("Select a product and packaging version.");
+    const result = await createBatchSet(actor, {
+      productId,
+      packagingVersionId,
+      lineId: str(fd, "lineId"),
+      lotPrefix: str(fd, "lotPrefix"),
+      manufactureDate: str(fd, "manufactureDate"),
+      expiryDate: str(fd, "expiryDate"),
+      batchCount: int(fd, "batchCount"),
+      cartonCount: int(fd, "cartonCount"),
+      looseUnits: 0,
+      productionNotes: str(fd, "productionNotes"),
+    });
+    groupId = result.groupId;
+  });
+  if (res.error) return res;
+  redirect(`/app/batches/groups/${groupId}`);
 }
 
 export async function requestAllocationAction(_: ActionState, fd: FormData): Promise<ActionState> {
@@ -157,16 +208,42 @@ export async function createProductAction(_: ActionState, fd: FormData): Promise
   const actor = await requireActor();
   return attempt(async () => {
     await createProduct(actor, {
-      alias: str(fd, "alias"),
       name: str(fd, "name"),
       dosageForm: str(fd, "dosageForm"),
       strength: str(fd, "strength"),
       packSize: str(fd, "packSize"),
+      brand: str(fd, "brand"),
+      familyName: str(fd, "familyName"),
+      variant: str(fd, "variant"),
+      category: str(fd, "category"),
+      description: str(fd, "description"),
+      imageUrl: str(fd, "imageUrl"),
+      packagingType: str(fd, "packagingType"),
+      netQuantity: int(fd, "netQuantity"),
+      measurementUnit: str(fd, "measurementUnit"),
+      manufacturingRequirements: str(fd, "manufacturingRequirements"),
+      shelfLifeDays: int(fd, "shelfLifeDays"),
+      unitsPerCarton: int(fd, "unitsPerCarton"),
+      cartonsPerPallet: str(fd, "cartonsPerPallet") ? int(fd, "cartonsPerPallet") : undefined,
       gtin: str(fd, "gtin"),
       nafdacRegNo: str(fd, "nafdacRegNo"),
     });
     revalidatePath("/app/products");
-    return { ok: true, message: "Product submitted for platform review." };
+    return { ok: true, message: "Product, automatic identifier and packaging version created. Submitted for platform review." };
+  });
+}
+
+export async function updateProductAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const actor = await requireActor();
+  const productId = str(fd, "productId");
+  return attempt(async () => {
+    const result = await updateProduct(actor, productId, {
+      name: str(fd, "name"), variant: str(fd, "variant"), category: str(fd, "category"), description: str(fd, "description"), imageUrl: str(fd, "imageUrl"),
+      manufacturingRequirements: str(fd, "manufacturingRequirements"), shelfLifeDays: int(fd, "shelfLifeDays"), packagingType: str(fd, "packagingType"),
+      unitsPerCarton: int(fd, "unitsPerCarton"), cartonsPerPallet: str(fd, "cartonsPerPallet") ? int(fd, "cartonsPerPallet") : undefined,
+    });
+    revalidatePath(`/app/products/${productId}`);
+    return { ok: true, message: result.packagingChanged ? `Product updated. Packaging version ${result.packagingVersion} is now active; existing batches retain their original snapshot.` : "Product details updated." };
   });
 }
 

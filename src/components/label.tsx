@@ -17,6 +17,7 @@ export async function PackLabel(props: {
   lot: string;
   expiry: string;
   state: string;
+  cartonCode?: string | null;
 }) {
   const svg = await qrSvg(props.url);
   const retired = props.state === "REJECTED" || props.state === "VOIDED";
@@ -34,6 +35,7 @@ export async function PackLabel(props: {
       <div className="text-center text-[10px] text-slate-500">
         Lot {props.lot} · Exp {props.expiry}
       </div>
+      {props.cartonCode && <div className="truncate text-center font-mono text-[9px] text-slate-500">Carton {props.cartonCode}</div>}
       <div className="text-center text-[9px] text-slate-400">Scan or dial {USSD_SERVICE_CODE}</div>
       {retired && <div className="absolute inset-0 flex items-center justify-center text-sm font-bold uppercase text-red-700">{props.state}</div>}
     </div>

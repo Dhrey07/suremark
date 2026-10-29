@@ -43,9 +43,15 @@ describe("issuance", () => {
     expect(units.every((u) => u.state === "RESERVED")).toBe(true);
     const codes = await db.select().from(schema.manualCodes);
     expect(new Set(codes.map((c) => c.lookupDigest.toString("hex"))).size).toBe(330);
-    expect(await db.$count(schema.credentials)).toBe(330);
-    // A decided request cannot be replayed.
-    expect(await code(decideAllocation(t.actors.owner, req.id, true, ""))).toBe("conflict");
+    const credentials = await db.select().from(schema.credentials);
+    expect(credentials).toHaveLength(330);
+    expect(credentials.every((credential) => credential.cuisVersion === 1 && credential.cuisAuthTag?.length === 16 && credential.cuisPayload?.startsWith("Q1VJU"))).toBe(true);
+    const [allocation] = await db.select().from(schema.identityAllocations);
+    expect(allocation).toMatchObject({ status: "completed", requestedQuantity: 330, issuedCount: 330, attempts: 1 });
+    // Retrying the same approved request is idempotent and returns the original print job.
+    const replay = await decideAllocation(t.actors.owner, req.id, true, "");
+    expect(replay).toEqual(res);
+    expect(await db.$count(schema.units)).toBe(330);
   });
 
   it("records maker-checker denials in the audit log", async () => {
@@ -72,15 +78,17 @@ describe("issuance", () => {
     expect(await code(requestAllocation(t.actors.productionManager, batch.id, 10, ""))).toBe("conflict");
   });
 
-  it("lets only one of two concurrent approvals issue identities", async () => {
+  it("makes concurrent approval retries converge on one issuance job", async () => {
     const batch = await draftBatch(t, 50);
     const req = await requestAllocation(t.actors.productionManager, batch.id, 50, "");
     const results = await Promise.all([
       code(decideAllocation(t.actors.factoryManager, req.id, true, "")),
       code(decideAllocation(t.actors.owner, req.id, true, "")),
     ]);
-    expect(results.sort()).toEqual(["conflict", "ok"]);
+    expect(results).toEqual(["ok", "ok"]);
     expect(await getDb().$count(schema.units)).toBe(50);
+    expect(await getDb().$count(schema.printJobs)).toBe(1);
+    expect(await getDb().$count(schema.identityAllocations)).toBe(1);
   });
 
   it("keeps identities globally unique across concurrent batches", async () => {

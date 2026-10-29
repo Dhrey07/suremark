@@ -7,6 +7,7 @@ export const PERMISSIONS = [
   "identity:allocate:request",
   "identity:allocate:approve",
   "print_job:execute",
+  "print_job:export",
   "unit:report_printed",
   "unit:report_rejected",
   "batch:reconcile",
@@ -20,7 +21,7 @@ export const PERMISSIONS = [
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
-export const PLATFORM_PERMISSIONS = ["manufacturers:review", "products:review", "demo:reset", "regulator:read"] as const;
+export const PLATFORM_PERMISSIONS = ["manufacturers:review", "manufacturers:govern", "products:review", "demo:reset", "regulator:read"] as const;
 export type PlatformPermission = (typeof PLATFORM_PERMISSIONS)[number];
 
 type RoleTemplate = { label: string; scope: string; permissions: Permission[] };
@@ -30,7 +31,7 @@ export const ROLES: Record<string, RoleTemplate> = {
   owner: {
     label: "Organization Owner",
     scope: "Organization",
-    permissions: ["batch:view", "identity:allocate:approve", "recall:approve", "risk:manage", "audit:read", "team:view", "catalog:manage"],
+    permissions: ["batch:view", "batch:create", "identity:allocate:request", "identity:allocate:approve", "print_job:export", "recall:approve", "risk:manage", "audit:read", "team:view", "catalog:manage"],
   },
   admin: {
     label: "Organization Admin",
@@ -45,17 +46,17 @@ export const ROLES: Record<string, RoleTemplate> = {
   production_manager: {
     label: "Production Manager",
     scope: "Assigned factories/lines",
-    permissions: ["batch:view", "batch:create", "identity:allocate:request", "batch:reconcile"],
+    permissions: ["batch:view", "batch:create", "identity:allocate:request", "print_job:export", "batch:reconcile"],
   },
   line_operator: {
     label: "Line Operator",
     scope: "Assigned lines",
-    permissions: ["batch:view", "print_job:execute", "unit:report_printed", "unit:report_rejected"],
+    permissions: ["batch:view", "print_job:execute", "print_job:export", "unit:report_printed", "unit:report_rejected"],
   },
   qa_officer: {
     label: "Quality Assurance Officer",
     scope: "Assigned factories",
-    permissions: ["batch:view", "unit:report_rejected", "batch:reconcile", "batch:release"],
+    permissions: ["batch:view", "print_job:export", "unit:report_rejected", "batch:reconcile", "batch:release"],
   },
   compliance_officer: {
     label: "Compliance Officer",
@@ -70,7 +71,7 @@ export const ROLES: Record<string, RoleTemplate> = {
 };
 
 export const PLATFORM_ROLES: Record<string, { label: string; permissions: PlatformPermission[] }> = {
-  platform_admin: { label: "Platform Onboarding Reviewer", permissions: ["manufacturers:review", "products:review", "demo:reset"] },
+  platform_admin: { label: "Platform Administrator", permissions: ["manufacturers:review", "manufacturers:govern", "products:review", "demo:reset"] },
   regulator_analyst: { label: "Regulator Analyst", permissions: ["regulator:read"] },
 };
 
