@@ -20,6 +20,10 @@ Accepts the public suspicious-product report form. Contact identity is deliberat
 
 Provider-adapter callback used by the simulated phone. It validates the callback signature, maintains session state, and delegates code checks to the shared verification service.
 
+### `POST /api/v1/telegram/webhook`
+
+Telegram Bot API webhook. Requests must carry `X-Telegram-Bot-Api-Secret-Token` matching `TELEGRAM_WEBHOOK_SECRET`; otherwise the route returns `401` and records a denial. Returns `404` when the secret is not configured. Each message update is answered inline with a `sendMessage` call, and code checks go through the shared verification service with channel `telegram`. Redelivered updates (same `update_id`) are acknowledged without a second check.
+
 ## Authenticated operations
 
 The current browser product uses typed Next.js server actions rather than duplicating the same mutations behind REST endpoints. These actions validate input, require a database session, enforce RBAC/ABAC and workflow state, and append audit events. A future machine API should be a thin transport layer over the existing catalog, production, recall, and audit services, with idempotency keys and service-account authentication.

@@ -35,6 +35,13 @@ export const env = {
         .filter((n) => Number.isInteger(n) && n > 0),
     );
   },
+  /** Secret Telegram echoes in X-Telegram-Bot-Api-Secret-Token; null disables the webhook. */
+  get telegramWebhookSecret(): string | null {
+    const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
+    if (!secret) return null;
+    if (!/^[A-Za-z0-9_-]{32,256}$/.test(secret)) throw new Error("TELEGRAM_WEBHOOK_SECRET must be 32-256 characters of A-Z, a-z, 0-9, _ or -");
+    return secret;
+  },
   get demoMode(): boolean {
     return process.env.DEMO_MODE === "true";
   },

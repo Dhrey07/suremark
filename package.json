@@ -16,6 +16,7 @@
     "test:e2e:prototype": "tsx --conditions=react-server scripts/run-fanta-prototype.ts",
     "test:e2e:browser": "playwright test",
     "test:db:registry": "tsx scripts/test-credential-registry.ts",
+    "telegram:webhook": "tsx --conditions=react-server scripts/telegram-webhook.ts",
     "benchmark:cuis": "tsx --conditions=react-server scripts/benchmark-cuis.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

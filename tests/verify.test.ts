@@ -5,6 +5,7 @@ import { getDb, schema } from "@/db";
 import { formatCode, generateCode } from "@/lib/codes";
 import { submitReport } from "@/lib/reports";
 import { decideRecall, initiateRecall } from "@/lib/services/recalls";
+import { handleTelegramUpdate } from "@/lib/telegram";
 import { handleUssd, signUssdRequest, ussdResultText, verifyUssdSignature } from "@/lib/ussd";
 import { verifyCode, verifyQr, type VerifyContext } from "@/lib/verify";
 import { makeTenant, resetDb } from "./fixtures";
@@ -53,6 +54,55 @@ describe("verification parity", () => {
     const f = await verifyQr(forged.toString("base64url"), ctx({ channel: "qr" }));
     expect(f.status).toBe("unable_to_verify");
     expect(f.product).toBeUndefined();
+  });
+});
+
+describe("telegram bot", () => {
+  const base = "https://example.test";
+  const privateChat = { id: 555, type: "private" };
+  let updateId = 0;
+  const update = (text: string, chat = privateChat) => ({
+    update_id: ++updateId,
+    message: { message_id: updateId, chat, from: { id: 777 }, text },
+  });
+  const telegramEvents = () => getDb().select().from(schema.verificationEvents).where(eq(schema.verificationEvents.channel, "telegram"));
+
+  it("answers a code with the same verdict and product details as the web channel", async () => {
+    const { labels } = await releasedBatch(t, { quantity: 2 });
+    const reply = await handleTelegramUpdate(update(`my code is ${formatCode(labels[0].code)}`), base);
+    const web = await verifyCode(labels[0].code, ctx());
+    expect(reply?.method).toBe("sendMessage");
+    expect(reply?.chat_id).toBe(555);
+    expect(reply?.text).toContain("Code authenticated");
+    expect(reply?.text).toContain(web.batch!.lot);
+    expect(web.history?.previousChecks).toBe(1);
+    const [event] = await telegramEvents();
+    expect(event.outcome).toBe("issued_no_known_alerts");
+    expect(event.deviceHash).not.toBeNull();
+  });
+
+  it("does not count a redelivered update twice", async () => {
+    const { labels } = await releasedBatch(t, { quantity: 1 });
+    const u = update(labels[0].code);
+    expect(await handleTelegramUpdate(u, base)).not.toBeNull();
+    expect(await handleTelegramUpdate(u, base)).toBeNull();
+    expect(await telegramEvents()).toHaveLength(1);
+  });
+
+  it("handles commands, deep links, typos, unknown codes and group chats", async () => {
+    const { labels } = await releasedBatch(t, { quantity: 1 });
+    const code = labels[0].code;
+    const typo = code.slice(0, 15) + ((Number(code[15]) + 1) % 10);
+    const group = { id: 9, type: "group" };
+    expect((await handleTelegramUpdate(update("/start"), base))?.text).toContain("16-digit code");
+    expect((await handleTelegramUpdate(update(`/start ${code}`), base))?.text).toContain("Code authenticated");
+    expect((await handleTelegramUpdate(update(`/check ${typo}`), base))?.text).toContain("typing error");
+    expect((await handleTelegramUpdate(update("hello"), base))?.text).toContain("could not find a product code");
+    const unknown = await handleTelegramUpdate(update(generateCode()), base);
+    expect(unknown?.text).toContain("Unable to verify");
+    expect(unknown?.text).toContain(`${base}/report`);
+    expect(await handleTelegramUpdate(update(code, group), base)).toBeNull();
+    expect((await handleTelegramUpdate(update(`/check@SuremarkBot ${code}`, group), base))?.text).toContain("Code authenticated");
   });
 });
 

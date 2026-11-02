@@ -9,7 +9,7 @@ import { kms } from "./kms";
 import { hit, peek } from "./ratelimit";
 import { lagosToday } from "./dates";
 
-export type Channel = "qr" | "web" | "ussd";
+export type Channel = "qr" | "web" | "ussd" | "telegram";
 
 export type VerifyContext = {
   channel: Channel;
@@ -68,6 +68,7 @@ const LIMITS = {
   qr: { total: 60, failures: 20 },
   web: { total: 30, failures: 10 },
   ussd: { total: 20, failures: 8 },
+  telegram: { total: 30, failures: 10 },
 } as const;
 
 const IMPOSSIBLE_SPEED_KMH = 250;

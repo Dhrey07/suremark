@@ -8,7 +8,8 @@
 4. On a new production database, set the three `BOOTSTRAP_ADMIN_*` variables, run `npm run db:bootstrap-admin` once, then remove those variables and rotate the initial password after first sign-in.
 5. Run `npm run typecheck`, `npm test`, and `npm run build`.
 6. Smoke-test sign-in, manufacturer approval, allocation, printing, reconciliation, release, QR/manual verification, report, recall, notification, and USSD simulation.
-7. Confirm backups and perform a restore into an isolated database before enabling writes.
+7. If the Telegram bot is enabled, set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` and `PUBLIC_BASE_URL`, then run `npm run telegram:webhook` once and confirm with `npm run telegram:webhook -- info`.
+8. Confirm backups and perform a restore into an isolated database before enabling writes.
 
 Cryptographic configuration must remain inside the protected processing environment. Production deployments must use managed KMS/HSM key versions and follow the private rotation runbook.
 

@@ -51,7 +51,7 @@ export const printJobStatus = pgEnum("print_job_status", ["ready", "in_progress"
 export const productionEventType = pgEnum("production_event_type", ["printed", "rejected", "unused"]);
 export const approvalAction = pgEnum("approval_action", ["identity_allocation", "recall"]);
 export const recallStatus = pgEnum("recall_status", ["pending_approval", "active", "rejected"]);
-export const channel = pgEnum("verification_channel", ["qr", "web", "ussd"]);
+export const channel = pgEnum("verification_channel", ["qr", "web", "ussd", "telegram"]);
 export const verificationOutcome = pgEnum("verification_outcome", [
   "issued_no_known_alerts",
   "suspicious",

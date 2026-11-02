@@ -37,7 +37,7 @@ export default async function RegulatorPage() {
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.4fr_1fr]">
         <Card>
-          <CardHeader title="Consumer checks per day" description="All channels (QR, web, USSD), last 30 days, West Africa Time" />
+          <CardHeader title="Consumer checks per day" description="All channels (QR, web, USSD, Telegram), last 30 days, West Africa Time" />
           <div className="p-5">
             <DailyColumns label="Consumer checks per day, last 30 days" data={d.daily.map((r) => ({ date: r.day, label: formatDate(r.day).replace(/ \d{4}$/, ""), value: r.n }))} />
           </div>

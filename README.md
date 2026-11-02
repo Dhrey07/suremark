@@ -1,6 +1,6 @@
 # Product Authentication Platform — pitch prototype
 
-Unit-level product identity for regulated goods. Manufacturers issue a unique identity, never reused, for every physical pack; consumers check it by **QR scan, a 16-digit code on the web, or USSD** — no app and no scratch panel. A regulator gets a read-only national view.
+Unit-level product identity for regulated goods. Manufacturers issue a unique identity, never reused, for every physical pack; consumers check it by **QR scan, a 16-digit code on the web, USSD, or a Telegram message** — no app and no scratch panel. A regulator gets a read-only national view.
 
 > All companies, people, products and registration numbers are fictional. This is not an official NAFDAC or GS1 service.
 
@@ -16,7 +16,7 @@ Engineering documentation: [authentication access](docs/AUTHENTICATION_ACCESS.md
 | Issuance ≠ activation: reserve → print → camera check → reconcile → QA release | `src/lib/services/production.ts`, print-job and batch pages |
 | Maker-checker and separation of duties (compared by user id, enforced in DB too) | `src/lib/authz.ts` (`requireIndependent`), `approval_requests` check constraint |
 | RBAC + resource scope (organisation / factory / line), tenant isolation | `src/lib/authz.ts`, `src/lib/actor.ts`, composite tenant foreign keys |
-| QR / web / USSD parity with truthful outcomes | `src/lib/verify.ts`, `src/lib/ussd.ts` |
+| QR / web / USSD / Telegram parity with truthful outcomes | `src/lib/verify.ts`, `src/lib/ussd.ts`, `src/lib/telegram.ts` |
 | Copied-code signals (impossible travel, many devices, volume), leaked-label alerts | `src/lib/verify.ts`, Alerts & cases page |
 | Anti-enumeration: rate limits, generic failures | `src/lib/ratelimit.ts`, `src/lib/verify.ts` |
 | Recall with dual control, propagated to every channel | `src/lib/services/recalls.ts` |
@@ -55,8 +55,19 @@ Sign in from `/login` — in demo mode each person is one click.
    - `MASTER_SECRET` — at least 32 random bytes, e.g. `openssl rand -base64 48`. Keep it stable: changing it invalidates every printed QR and code.
    - `DEMO_MODE=false` for production. Database-backed demonstration accounts and reset controls are available only when this is deliberately enabled outside production.
    - Optional `SIGNING_KEY_VERSION` (default `1`), `REVOKED_KEY_VERSIONS`, `PUBLIC_BASE_URL` (defaults to the production domain).
+   - Optional Telegram bot: `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_SECRET` (see below).
 4. Run `npm run db:migrate`. For a controlled evaluation database, run `npm run db:seed -- --if-empty`; never run the resetting seed against production data.
 5. Deploy. The frontend, server actions, sessions, RBAC, audit log, issuance, and verification services all use the same Supabase PostgreSQL database through Drizzle transactions.
+
+## Telegram bot
+
+Consumers can message the 16-digit code to the Telegram bot and get the same result as the web, QR and USSD channels: verdict, product, manufacturer, batch, expiry, recall advice and check history. Checks are recorded with channel `telegram` and feed the same copied-code signals and rate limits (keyed by Telegram user id).
+
+1. Set `TELEGRAM_BOT_TOKEN` (from @BotFather), `TELEGRAM_WEBHOOK_SECRET` (`openssl rand -hex 32`) and `PUBLIC_BASE_URL` (public `https://` URL) in the deployment and in `.env.local`. Never commit the token.
+2. Deploy and run `npm run db:migrate` (adds the `telegram` channel).
+3. Run `npm run telegram:webhook` once to register the webhook and the `/check` and `/help` commands. `npm run telegram:webhook -- info` shows the webhook status.
+
+Users can send the code on its own, inside a sentence, or as `/check <code>`. A `t.me/<bot>?start=<16 digits>` link checks the code as soon as the chat opens. In group chats the bot answers only commands. For local testing, expose `npm run dev` through an HTTPS tunnel and use that URL as `PUBLIC_BASE_URL`.
 
 ## Local development
 
